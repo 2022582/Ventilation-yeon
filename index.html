@@ -1,0 +1,770 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Save, FileText, Camera, Wand2, Calculator, 
+  History, CheckCircle, AlertTriangle, Plus, X, UploadCloud, ChevronRight, Layers
+} from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, query, orderBy } from 'firebase/firestore';
+
+// ==========================================
+// 1. Firebase Initialization
+// ==========================================
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'local-exhaust-app';
+
+let app, auth, db;
+try {
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+} catch (e) {
+  console.error("Firebase init error", e);
+}
+
+// ==========================================
+// 2. Constants & Initial State
+// ==========================================
+const INITIAL_REPORT_DATA = {
+  id: '',
+  companyName: localStorage.getItem('companyName') || '',
+  evalDate: new Date().toISOString().split('T')[0],
+  manager: localStorage.getItem('manager') || '',
+  department: '',
+};
+
+const INITIAL_HOOD_DATA = {
+  id: '', // initialized on creation
+  processName: '',
+  material: '',
+  hazardClass: '입자상-외부식측하방형 (1.0m/s)', 
+  hoodType: '외부식 (장방형/원형)',
+  hoodShape: '장방형',
+  width: '',
+  length: '',
+  diameter: '',
+  hasFlange: false,
+  ductDiameter: '',
+  controlDistance: '',
+  faceVelocities: ['', '', '', '', ''],
+  ductStaticPressure: '',
+  prevAvgVelocity: '',
+  images: { hood: null, fan: null },
+  aiSuggestion: '',
+  comments: '',
+};
+
+// ==========================================
+// 3. Helper Functions
+// ==========================================
+const compressImage = (file) => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (e) => {
+      const img = new Image();
+      img.src = e.target.result;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        let { width, height } = img;
+        const maxDim = 800;
+
+        if (width > height && width > maxDim) {
+          height *= maxDim / width;
+          width = maxDim;
+        } else if (height > maxDim) {
+          width *= maxDim / height;
+          height = maxDim;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', 0.7));
+      };
+    };
+  });
+};
+
+const getLegalVelocity = (hazardClass) => {
+  const match = hazardClass.match(/\(([\d.]+)m\/s\)/);
+  if (match) return parseFloat(match[1]);
+  return 1.0;
+};
+
+const getCalculatedData = (hood) => {
+  let area = 0;
+  let requiredQ = 0;
+  
+  const w = parseFloat(hood.width) || 0;
+  const l = parseFloat(hood.length) || 0;
+  const dia = parseFloat(hood.diameter) || 0;
+  const x = parseFloat(hood.controlDistance) || 0;
+  const legalV = getLegalVelocity(hood.hazardClass);
+
+  // 1. Area
+  if (hood.hoodType === '레시버식 (캐노피)') {
+    area = hood.hoodShape === '장방형' ? 2 * (w + l) : Math.PI * dia; // Perimeter here
+  } else {
+    area = hood.hoodShape === '장방형' ? (w * l) : (Math.PI * Math.pow(dia / 2, 2));
+  }
+
+  // 2. Required Q
+  if (hood.hoodType === '포위식 (부스형)') {
+    requiredQ = 60 * legalV * area;
+  } else if (hood.hoodType === '외부식 (슬롯형)') {
+    const factor = hood.hasFlange ? 2.6 : 3.7;
+    requiredQ = 60 * factor * l * legalV * x;
+  } else if (hood.hoodType === '외부식 (장방형/원형)') {
+    const factor = hood.hasFlange ? 0.75 : 1.0;
+    requiredQ = 60 * factor * legalV * (10 * Math.pow(x, 2) + area);
+  } else if (hood.hoodType === '레시버식 (캐노피)') {
+    const P = area; // computed perimeter
+    requiredQ = 60 * 1.4 * P * legalV * x;
+  }
+
+  // 3. Velocities
+  const validVels = hood.faceVelocities.map(v => parseFloat(v)).filter(v => !isNaN(v));
+  const avgVelocity = validVels.length > 0 ? (validVels.reduce((a,b)=>a+b, 0) / validVels.length) : 0;
+  const actualQ = 60 * area * avgVelocity;
+  const isPass = avgVelocity >= legalV;
+
+  return { area, requiredQ, actualQ, avgVelocity, legalV, isPass };
+};
+
+// ==========================================
+// 4. Main Component
+// ==========================================
+export default function LocalExhaustDashboard() {
+  const [user, setUser] = useState(null);
+  const [records, setRecords] = useState([]);
+  
+  const [reportData, setReportData] = useState(INITIAL_REPORT_DATA);
+  const [hoods, setHoods] = useState([{ ...INITIAL_HOOD_DATA, id: Date.now().toString() }]);
+  const [activeHoodIndex, setActiveHoodIndex] = useState(0);
+  
+  const [activeTab, setActiveTab] = useState('info');
+  const [loading, setLoading] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [isPdfGenerating, setIsPdfGenerating] = useState(false);
+  const pdfRef = useRef(null);
+
+  const currentHood = hoods[activeHoodIndex] || hoods[0];
+  const calcData = getCalculatedData(currentHood);
+
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js';
+    script.async = true;
+    document.body.appendChild(script);
+  }, []);
+
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error('Auth error', err);
+      }
+    };
+    initAuth();
+    const unsub = onAuthStateChanged(auth, setUser);
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const q = query(collection(db, 'artifacts', appId, 'users', user.uid, 'ventilation_records'));
+    const unsub = onSnapshot(q, (snap) => {
+      const data = snap.docs.map(docSnap => {
+        const d = docSnap.data();
+        // Legacy Support: Convert old single-hood records to new multi-hood format
+        if (!d.hoods) {
+          const legacyHood = {
+            id: docSnap.id + '_h',
+            processName: d.processName || '',
+            material: d.material || '',
+            hazardClass: d.hazardClass || '입자상-외부식측하방형 (1.0m/s)',
+            hoodType: d.hoodType || '외부식 (장방형/원형)',
+            hoodShape: d.hoodShape || '장방형',
+            width: d.width || '', length: d.length || '', diameter: d.diameter || '',
+            hasFlange: d.hasFlange || false, ductDiameter: d.ductDiameter || '',
+            controlDistance: d.controlDistance || '',
+            faceVelocities: d.faceVelocities || ['', '', '', '', ''],
+            ductStaticPressure: d.ductStaticPressure || '',
+            prevAvgVelocity: d.prevAvgVelocity || '',
+            images: d.images || { hood: null, fan: null },
+            aiSuggestion: d.aiSuggestion || '',
+            comments: d.comments || ''
+          };
+          return {
+            id: docSnap.id, companyName: d.companyName || '', evalDate: d.evalDate || '',
+            manager: d.manager || '', department: d.department || '', hoods: [legacyHood], updatedAt: d.updatedAt
+          };
+        }
+        return { id: docSnap.id, ...d };
+      });
+      data.sort((a, b) => new Date(b.evalDate) - new Date(a.evalDate));
+      setRecords(data);
+    });
+    return () => unsub();
+  }, [user]);
+
+  // Handlers
+  const handleReportChange = (field, value) => {
+    setReportData(prev => {
+      const newData = { ...prev, [field]: value };
+      if (field === 'companyName') localStorage.setItem('companyName', value);
+      if (field === 'manager') localStorage.setItem('manager', value);
+      return newData;
+    });
+  };
+
+  const handleHoodChange = (field, value) => {
+    const newHoods = [...hoods];
+    newHoods[activeHoodIndex][field] = value;
+    setHoods(newHoods);
+  };
+
+  const handleArrayChange = (index, value) => {
+    const newHoods = [...hoods];
+    newHoods[activeHoodIndex].faceVelocities[index] = value;
+    setHoods(newHoods);
+  };
+
+  const handleImageUpload = async (e, type) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const base64 = await compressImage(file);
+    const newHoods = [...hoods];
+    newHoods[activeHoodIndex].images[type] = base64;
+    setHoods(newHoods);
+  };
+
+  const addHood = () => {
+    setHoods([...hoods, { ...INITIAL_HOOD_DATA, id: Date.now().toString() }]);
+    setActiveHoodIndex(hoods.length);
+    setActiveTab('info');
+  };
+
+  const removeHood = (index) => {
+    if (hoods.length === 1) return; // Prevent removing the last hood
+    const newHoods = hoods.filter((_, i) => i !== index);
+    setHoods(newHoods);
+    setActiveHoodIndex(Math.max(0, index - 1));
+  };
+
+  const resetForm = () => {
+    setReportData(INITIAL_REPORT_DATA);
+    setHoods([{ ...INITIAL_HOOD_DATA, id: Date.now().toString() }]);
+    setActiveHoodIndex(0);
+    setActiveTab('info');
+  };
+
+  // Cloud Actions
+  const handleSave = async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      const collectionRef = collection(db, 'artifacts', appId, 'users', user.uid, 'ventilation_records');
+      const docId = reportData.id || doc(collectionRef).id;
+      
+      const saveData = {
+        ...reportData,
+        id: docId,
+        hoods: hoods,
+        updatedAt: new Date().toISOString()
+      };
+
+      await setDoc(doc(collectionRef, docId), saveData);
+      setReportData(prev => ({ ...prev, id: docId }));
+      alert('클라우드에 안전하게 저장되었습니다.');
+    } catch (err) {
+      console.error("Save failed", err);
+    }
+    setLoading(false);
+  };
+
+  const loadRecord = (rec) => {
+    setReportData({
+      id: rec.id, companyName: rec.companyName, evalDate: rec.evalDate, manager: rec.manager, department: rec.department
+    });
+    setHoods(rec.hoods.length > 0 ? rec.hoods : [{ ...INITIAL_HOOD_DATA, id: Date.now().toString() }]);
+    setActiveHoodIndex(0);
+    setActiveTab('info');
+  };
+
+  const deleteRecord = async (id) => {
+    if(!user) return;
+    if(confirm('이 보고서와 포함된 모든 측정 기록을 삭제하시겠습니까?')){
+      try {
+        await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'ventilation_records', id));
+        if(reportData.id === id) resetForm();
+      } catch(err) {
+        console.error(err);
+      }
+    }
+  }
+
+  // AI Analysis
+  const fetchAiSuggestions = async () => {
+    setAiLoading(true);
+    const apiKey = ""; 
+    const prompt = `
+당신은 대한민국 최고 수준의 산업위생관리 기술사입니다. KOSHA GUIDE W-1-2019를 철저히 준수합니다.
+다음 국소배기장치 제원과 측정 결과를 바탕으로, 제어풍속이 미달된 원인을 분석하고 즉시 적용 가능한 공학적/관리적 개선대책을 3가지로 명확하게 요약해 주세요.
+
+[${currentHood.processName || '해당'} 공정 국소배기장치]
+- 유해화학물질: ${currentHood.material}
+- 후드형식: ${currentHood.hoodType} / ${currentHood.hasFlange ? '플랜지 있음' : '플랜지 없음'}
+- 개구면적: ${calcData.area.toFixed(3)} m2
+- 제어거리: ${currentHood.controlDistance || 0} m
+- 법적 필요 배기유량: ${calcData.requiredQ.toFixed(1)} CMM
+- 현재 제어풍속: ${calcData.avgVelocity.toFixed(2)} m/s (법적기준: ${calcData.legalV} m/s)
+
+전문적이고 실무적인 톤으로 마크다운 없이 간결한 텍스트로 응답해 주세요.`;
+
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+      });
+      const json = await res.json();
+      if (json.error) throw new Error(json.error.message);
+      handleHoodChange('aiSuggestion', json.candidates[0].content.parts[0].text);
+    } catch (err) {
+      console.error("AI Error:", err);
+      handleHoodChange('aiSuggestion', "AI 분석 중 오류가 발생했습니다. 나중에 다시 시도해 주세요.");
+    }
+    setAiLoading(false);
+  };
+
+  const generatePDF = () => {
+    setIsPdfGenerating(true);
+    setTimeout(() => {
+      const element = pdfRef.current;
+      const opt = {
+        margin:       10,
+        filename:     `국소배기성능평가_${reportData.companyName}_${reportData.evalDate}.pdf`,
+        image:        { type: 'jpeg', quality: 0.98 },
+        html2canvas:  { scale: 2, useCORS: true },
+        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+      };
+      window.html2pdf().set(opt).from(element).save().then(() => setIsPdfGenerating(false));
+    }, 500); 
+  };
+
+  const TabButton = ({ id, icon: Icon, label }) => (
+    <button
+      onClick={() => setActiveTab(id)}
+      className={`flex items-center space-x-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+        activeTab === id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+      }`}
+    >
+      <Icon className="w-4 h-4" />
+      <span>{label}</span>
+    </button>
+  );
+
+  return (
+    <div className="flex flex-col md:flex-row h-screen bg-gray-100 overflow-hidden font-sans">
+      {/* Left Panel */}
+      <div className="w-full md:w-3/5 lg:w-1/2 flex flex-col bg-white shadow-xl z-10 overflow-hidden border-r">
+        <div className="bg-slate-900 text-white p-4 flex items-center justify-between shadow-md">
+          <div className="flex items-center space-x-3">
+            <div className="bg-blue-500 p-2 rounded-lg"><Calculator className="w-5 h-5 text-white" /></div>
+            <div>
+              <h1 className="text-lg font-bold">국소배기장치 다중 성능평가</h1>
+              <p className="text-xs text-slate-400">사업장 종합 보고서 기반</p>
+            </div>
+          </div>
+          <button onClick={resetForm} className="text-xs bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-md border border-slate-600">신규 작성</button>
+        </div>
+
+        {/* Top Level Tabs */}
+        <div className="flex px-4 border-b bg-gray-50 overflow-x-auto hide-scrollbar">
+          <TabButton id="info" icon={FileText} label="기본정보" />
+          <TabButton id="specs" icon={Calculator} label="후드제원" />
+          <TabButton id="measures" icon={History} label="측정결과" />
+          <TabButton id="improve" icon={Wand2} label="평가/개선" />
+        </div>
+
+        {/* Hood Navigator - Always visible below tabs */}
+        <div className="flex px-4 py-3 bg-blue-50/50 border-b overflow-x-auto items-center gap-2 custom-scrollbar shadow-inner">
+          <span className="text-xs font-bold text-slate-600 whitespace-nowrap mr-1 flex items-center"><Layers className="w-3 h-3 mr-1"/>측정 후드:</span>
+          {hoods.map((h, i) => (
+            <button 
+              key={h.id || i}
+              onClick={() => setActiveHoodIndex(i)} 
+              className={`flex items-center px-3 py-1.5 text-xs rounded-full font-medium transition-colors whitespace-nowrap
+                ${i === activeHoodIndex ? 'bg-blue-600 text-white shadow' : 'bg-white text-blue-700 border border-blue-200 hover:bg-blue-100'}`}
+            >
+              {h.processName || `후드 ${i+1}`}
+              {hoods.length > 1 && (
+                <span onClick={(e) => { e.stopPropagation(); removeHood(i); }} className={`ml-2 w-4 h-4 rounded-full flex items-center justify-center ${i===activeHoodIndex ? 'hover:bg-blue-700' : 'hover:bg-blue-200'} transition-colors`}>
+                  <X className="w-3 h-3" />
+                </span>
+              )}
+            </button>
+          ))}
+          <button onClick={addHood} className="px-3 py-1.5 bg-white text-slate-600 border border-dashed border-slate-400 rounded-full text-xs hover:bg-slate-50 flex items-center whitespace-nowrap shadow-sm">
+            <Plus className="w-3 h-3 mr-1"/> 추가
+          </button>
+        </div>
+
+        {/* Form Content */}
+        <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-white">
+          {activeTab === 'info' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                 <h3 className="text-sm font-bold text-slate-800 mb-3 border-b pb-2 flex justify-between">
+                   <span>보고서 공통 정보 (사업장)</span>
+                   <span className="text-xs text-blue-600 font-normal">모든 후드에 적용</span>
+                 </h3>
+                 <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">사업장명</label>
+                    <input type="text" className="w-full p-2 border rounded-md" value={reportData.companyName} onChange={e => handleReportChange('companyName', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">평가일자</label>
+                    <input type="date" className="w-full p-2 border rounded-md" value={reportData.evalDate} onChange={e => handleReportChange('evalDate', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">측정자(기술사)</label>
+                    <input type="text" className="w-full p-2 border rounded-md" value={reportData.manager} onChange={e => handleReportChange('manager', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">부서/장소</label>
+                    <input type="text" className="w-full p-2 border rounded-md" value={reportData.department} onChange={e => handleReportChange('department', e.target.value)} />
+                  </div>
+                 </div>
+              </div>
+
+              <div className="bg-blue-50/30 p-4 rounded-xl border border-blue-100">
+                <h3 className="text-sm font-bold text-blue-900 mb-3 border-b border-blue-100 pb-2">개별 후드 정보 <span className="font-normal text-slate-500">({currentHood.processName || `후드 ${activeHoodIndex+1}`})</span></h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">해당 공정/기계명</label>
+                    <input type="text" className="w-full p-2 border rounded-md" placeholder="예: 용접부스 1호기" value={currentHood.processName} onChange={e => handleHoodChange('processName', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">취급 유해물질</label>
+                    <input type="text" className="w-full p-2 border rounded-md" placeholder="예: 용접흄" value={currentHood.material} onChange={e => handleHoodChange('material', e.target.value)} />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">물질 상태 및 법적 제어풍속 기준</label>
+                    <select className="w-full p-2 border rounded-md bg-white" value={currentHood.hazardClass} onChange={e => handleHoodChange('hazardClass', e.target.value)}>
+                      <optgroup label="가스 상태 (Gas)">
+                        <option value="가스상-포위식 (0.4m/s)">포위식 (포위형) - 0.4 m/s 이상</option>
+                        <option value="가스상-외부식측하방형 (0.5m/s)">외부식 (측방형/하방형) - 0.5 m/s 이상</option>
+                        <option value="가스상-외부식상방형 (1.0m/s)">외부식 (상방형) - 1.0 m/s 이상</option>
+                      </optgroup>
+                      <optgroup label="입자 상태 (Particulate)">
+                        <option value="입자상-포위식 (0.7m/s)">포위식 (포위형) - 0.7 m/s 이상</option>
+                        <option value="입자상-외부식측하방형 (1.0m/s)">외부식 (측방형/하방형) - 1.0 m/s 이상</option>
+                        <option value="입자상-외부식상방형 (1.2m/s)">외부식 (상방형) - 1.2 m/s 이상</option>
+                      </optgroup>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'specs' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <h3 className="text-sm font-bold text-slate-800 mb-3 flex items-center"><ChevronRight className="w-4 h-4 mr-1 text-blue-600"/>후드 형식 및 형태</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">후드 형식</label>
+                    <select className="w-full p-2 border rounded-md" value={currentHood.hoodType} onChange={e => handleHoodChange('hoodType', e.target.value)}>
+                      <option value="포위식 (부스형)">포위식 (부스형)</option>
+                      <option value="외부식 (장방형/원형)">외부식 (장방형/원형)</option>
+                      <option value="외부식 (슬롯형)">외부식 (슬롯형)</option>
+                      <option value="레시버식 (캐노피)">레시버식 (캐노피)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">개구면 형태</label>
+                    <select className="w-full p-2 border rounded-md" value={currentHood.hoodShape} onChange={e => handleHoodChange('hoodShape', e.target.value)}>
+                      <option value="장방형">장방형 (사각)</option>
+                      <option value="원형">원형</option>
+                    </select>
+                  </div>
+                  <div className="col-span-2 flex items-center mt-2">
+                    <label className="flex items-center space-x-2 cursor-pointer bg-white border p-2 rounded-md flex-1 shadow-sm">
+                      <input type="checkbox" checked={currentHood.hasFlange} onChange={e => handleHoodChange('hasFlange', e.target.checked)} className="w-4 h-4 text-blue-600 rounded border-gray-300" />
+                      <span className="text-sm font-medium text-gray-700">플랜지(Flange) 부착 여부</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <h3 className="text-sm font-bold text-slate-800 mb-3 flex items-center"><ChevronRight className="w-4 h-4 mr-1 text-blue-600"/>상세 치수 (m 단위)</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  {currentHood.hoodShape === '장방형' ? (
+                    <>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">가로 폭 (W)</label>
+                        <input type="number" step="0.01" className="w-full p-2 border rounded-md" value={currentHood.width} onChange={e => handleHoodChange('width', e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">세로 폭 (L)</label>
+                        <input type="number" step="0.01" className="w-full p-2 border rounded-md" value={currentHood.length} onChange={e => handleHoodChange('length', e.target.value)} />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="col-span-2">
+                      <label className="block text-xs text-gray-500 mb-1">직경 (D)</label>
+                      <input type="number" step="0.01" className="w-full p-2 border rounded-md" value={currentHood.diameter} onChange={e => handleHoodChange('diameter', e.target.value)} />
+                    </div>
+                  )}
+                  <div className="col-span-2 pt-2 border-t mt-2">
+                     <label className="block text-xs text-gray-500 mb-1">덕트 직경 (선택, mm)</label>
+                     <input type="number" className="w-full p-2 border rounded-md" value={currentHood.ductDiameter} onChange={e => handleHoodChange('ductDiameter', e.target.value)} />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'measures' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+              <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
+                <h3 className="text-sm font-bold text-blue-900 mb-2">제어거리 (X)</h3>
+                <p className="text-xs text-blue-700 mb-3">유해물질 발생원에서 후드 개구면까지의 가장 먼 거리 (포위식은 0)</p>
+                <input type="number" step="0.01" className="w-full p-2 border border-blue-200 rounded-md" value={currentHood.controlDistance} onChange={e => handleHoodChange('controlDistance', e.target.value)} />
+              </div>
+
+              <div>
+                <div className="flex justify-between items-end mb-2">
+                  <h3 className="text-sm font-bold text-slate-800">개구면/제어 풍속 측정 (m/s)</h3>
+                  <span className="text-xs font-semibold px-2 py-1 bg-gray-200 rounded text-gray-700">평균: {calcData.avgVelocity.toFixed(2)}</span>
+                </div>
+                <div className="grid grid-cols-5 gap-2">
+                  {currentHood.faceVelocities.map((v, i) => (
+                    <input key={i} type="number" step="0.01" className="w-full p-2 text-center border rounded-md focus:border-blue-500 focus:ring-1" placeholder={`#${i+1}`} value={v} onChange={e => handleArrayChange(i, e.target.value)} />
+                  ))}
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-dashed">
+                <h3 className="text-sm font-bold text-slate-800 mb-2">기타 측정값</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">덕트 정압 (mmH2O)</label>
+                    <input type="number" className="w-full p-2 border rounded-md" value={currentHood.ductStaticPressure} onChange={e => handleHoodChange('ductStaticPressure', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">전회 측정 평균풍속 (m/s)</label>
+                    <input type="number" step="0.01" className="w-full p-2 border rounded-md bg-gray-50" value={currentHood.prevAvgVelocity} onChange={e => handleHoodChange('prevAvgVelocity', e.target.value)} />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'improve' && (
+            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+              <div className={`p-4 rounded-xl border ${calcData.isPass ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+                <div className="flex items-center space-x-3">
+                  {calcData.isPass ? <CheckCircle className="w-8 h-8 text-green-500" /> : <AlertTriangle className="w-8 h-8 text-red-500" />}
+                  <div>
+                    <h3 className={`font-bold ${calcData.isPass ? 'text-green-800' : 'text-red-800'}`}>
+                      {calcData.isPass ? '성능 양호 (적합)' : '성능 미흡 (부적합)'}
+                    </h3>
+                    <p className={`text-xs ${calcData.isPass ? 'text-green-600' : 'text-red-600'}`}>
+                      현재 후드 측정 평균: {calcData.avgVelocity.toFixed(2)}m/s (법적 기준: {calcData.legalV}m/s)
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {!calcData.isPass && (
+                <div className="bg-gradient-to-r from-purple-50 to-blue-50 p-4 rounded-xl border border-purple-100">
+                  <div className="flex justify-between items-center mb-3">
+                    <h3 className="text-sm font-bold text-purple-900 flex items-center"><Wand2 className="w-4 h-4 mr-2 text-purple-600" /> AI 개선 솔루션 (현재 후드)</h3>
+                    <button onClick={fetchAiSuggestions} disabled={aiLoading} className="text-xs bg-purple-600 text-white px-3 py-1.5 rounded-md hover:bg-purple-700 disabled:opacity-50">
+                      {aiLoading ? '분석 중...' : '원인/대책 생성'}
+                    </button>
+                  </div>
+                  {currentHood.aiSuggestion && (
+                    <textarea 
+                      className="mt-3 p-3 w-full bg-white rounded-lg border border-purple-200 focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-700 font-mono text-xs shadow-inner resize-y outline-none leading-relaxed"
+                      rows="6"
+                      value={currentHood.aiSuggestion}
+                      onChange={e => handleHoodChange('aiSuggestion', e.target.value)}
+                      placeholder="AI 분석 결과가 이곳에 생성되며, 자유롭게 수정할 수 있습니다."
+                    />
+                  )}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-bold text-slate-800 mb-2">현장 사진 업로드</label>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="border-2 border-dashed rounded-xl p-4 flex flex-col items-center text-center bg-gray-50 relative overflow-hidden group">
+                    {currentHood.images.hood ? (
+                      <><img src={currentHood.images.hood} className="absolute inset-0 w-full h-full object-cover opacity-60" /><span className="relative z-10 text-xs bg-white px-2 py-1 rounded">후드 사진 변경</span></>
+                    ) : (
+                      <><Camera className="w-6 h-6 text-gray-400 mb-2" /><span className="text-xs text-gray-500">후드/작업장면 첨부</span></>
+                    )}
+                    <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer" onChange={e => handleImageUpload(e, 'hood')} />
+                  </div>
+                  <div className="border-2 border-dashed rounded-xl p-4 flex flex-col items-center text-center bg-gray-50 relative overflow-hidden group">
+                     {currentHood.images.fan ? (
+                      <><img src={currentHood.images.fan} className="absolute inset-0 w-full h-full object-cover opacity-60" /><span className="relative z-10 text-xs bg-white px-2 py-1 rounded">송풍기 사진 변경</span></>
+                    ) : (
+                      <><UploadCloud className="w-6 h-6 text-gray-400 mb-2" /><span className="text-xs text-gray-500">송풍기/정화장치 첨부</span></>
+                    )}
+                    <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer" onChange={e => handleImageUpload(e, 'fan')} />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-800 mb-2">기술사 코멘트</label>
+                <textarea rows="3" className="w-full p-3 border rounded-lg text-sm" value={currentHood.comments} onChange={e => handleHoodChange('comments', e.target.value)} />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer Actions */}
+        <div className="bg-white border-t p-4 flex space-x-3 shadow-lg z-20">
+          <button onClick={generatePDF} disabled={isPdfGenerating} className="flex-1 flex justify-center py-2.5 px-4 border border-blue-600 text-blue-600 rounded-lg hover:bg-blue-50 font-bold">
+            <FileText className="w-4 h-4 mr-2" /> {isPdfGenerating ? 'PDF 생성중...' : '전체 리포트 PDF 출력'}
+          </button>
+          <button onClick={handleSave} disabled={loading} className="flex-1 flex justify-center py-2.5 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold">
+            <Save className="w-4 h-4 mr-2" /> {loading ? '저장중...' : '클라우드 통합 저장'}
+          </button>
+        </div>
+      </div>
+
+      {/* Right Panel */}
+      <div className="w-full md:w-2/5 lg:w-1/2 flex flex-col bg-slate-100 overflow-hidden relative">
+        <div className="p-6 overflow-y-auto h-full space-y-6">
+          
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <div className="bg-slate-800 px-5 py-3 border-b border-slate-700 flex justify-between">
+              <h2 className="text-white font-semibold flex items-center"><Calculator className="w-4 h-4 mr-2" /> 실시간 계산 요약</h2>
+              <span className="text-xs text-slate-300">현재 탭: {currentHood.processName || `후드 ${activeHoodIndex+1}`}</span>
+            </div>
+            <div className="p-5 grid grid-cols-2 gap-y-4 gap-x-6">
+              <div><p className="text-xs text-gray-500 mb-1">개구부 면적 (A)</p><p className="text-xl font-bold">{calcData.area.toFixed(3)} <span className="text-sm font-normal">m²</span></p></div>
+              <div><p className="text-xs text-gray-500 mb-1">측정 제어풍속 (V)</p><p className={`text-xl font-bold ${calcData.isPass ? 'text-green-600' : 'text-red-600'}`}>{calcData.avgVelocity.toFixed(2)} <span className="text-sm font-normal">m/s</span></p></div>
+              <div className="col-span-2 pt-3 border-t"><div className="flex justify-between">
+                  <div><p className="text-xs text-gray-500 mb-1">법적 필요 배기유량 (Q)</p><p className="text-2xl font-black text-blue-600">{calcData.requiredQ.toFixed(1)} <span className="text-sm font-bold">CMM</span></p></div>
+                  <div className="text-right"><p className="text-xs text-gray-500 mb-1">추정 배기유량 (Face V)</p><p className="text-lg font-bold text-slate-600">{calcData.actualQ.toFixed(1)} <span className="text-xs font-normal">CMM</span></p></div>
+              </div></div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col flex-1 max-h-[500px]">
+             <div className="bg-slate-50 px-5 py-3 border-b flex justify-between">
+              <h2 className="text-slate-800 font-semibold flex"><History className="w-4 h-4 mr-2 text-slate-500" /> 클라우드 보고서 목록</h2>
+              <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full font-bold">{records.length}건</span>
+            </div>
+            <div className="p-3 overflow-y-auto flex-1 divide-y">
+              {records.length === 0 ? <div className="text-center py-10 text-gray-400 text-sm">저장된 보고서가 없습니다.</div> : records.map(rec => {
+                const isAllPass = rec.hoods.every(h => getCalculatedData(h).isPass);
+                return (
+                  <div key={rec.id} className="py-3 px-2 hover:bg-slate-50 rounded-lg cursor-pointer group relative" onClick={() => loadRecord(rec)}>
+                    <div className="flex justify-between items-start mb-1">
+                      <div>
+                        <span className="font-bold text-slate-800 text-sm">{rec.companyName || '사업장 미상'} <span className="text-blue-600 font-normal">[{rec.hoods.length}개 후드]</span></span>
+                        <span className="text-xs text-gray-500 ml-2">{rec.evalDate}</span>
+                      </div>
+                      <span className={`w-2 h-2 rounded-full mt-1.5 ${isAllPass ? 'bg-green-500' : 'bg-red-500'}`}></span>
+                    </div>
+                    <button onClick={(e) => { e.stopPropagation(); deleteRecord(rec.id); }} className="absolute right-2 bottom-2 text-xs text-red-500 opacity-0 group-hover:opacity-100 bg-white/80 px-1 rounded">삭제</button>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* PDF Container : Loop through Hoods */}
+      <div className="hidden">
+        <div ref={pdfRef} className="bg-white text-black" style={{ width: '210mm', fontFamily: 'sans-serif' }}>
+          {hoods.map((hood, index) => {
+            const hData = getCalculatedData(hood);
+            return (
+              <div key={index} style={{ padding: '15mm 20mm', minHeight: '297mm', boxSizing: 'border-box', pageBreakBefore: index > 0 ? 'always' : 'auto' }}>
+                {/* Header (First Page Only or Repeated) */}
+                <div className="flex items-center justify-between border-b-2 border-slate-800 pb-4 mb-6">
+                  <div>
+                    <h1 className="text-2xl font-black tracking-tight">국소배기장치 성능평가 결과보고서</h1>
+                    <p className="text-sm text-slate-500 mt-1">KOSHA GUIDE W-1-2019 / 사업장: {reportData.companyName} ({index+1}/{hoods.length})</p>
+                  </div>
+                  <svg width="50" height="50" viewBox="0 0 100 100" fill="none"><rect x="10" y="10" width="80" height="80" rx="15" fill="#1e3a8a"/><path d="M50 25L75 40V65L50 80L25 65V40L50 25Z" stroke="#38bdf8" strokeWidth="4"/><circle cx="50" cy="52" r="10" fill="#3b82f6"/></svg>
+                </div>
+                <div className="h-1.5 w-full flex mb-6 rounded overflow-hidden"><div className="flex-1 bg-blue-600"></div><div className="flex-1 bg-teal-500"></div><div className="flex-1 bg-orange-500"></div></div>
+
+                <h2 className="text-base font-bold bg-slate-100 p-2 border-l-4 border-blue-600 mb-3">1. 공통 정보 및 해당 공정</h2>
+                <table className="w-full text-sm border-collapse mb-6 border border-slate-300">
+                  <tbody>
+                    <tr className="border-b border-slate-300"><th className="bg-slate-50 border-r p-2 w-1/4">사업장 / 부서</th><td className="p-2 border-r w-1/4">{reportData.companyName} / {reportData.department}</td><th className="bg-slate-50 border-r p-2 w-1/4">평가일/측정자</th><td className="p-2 w-1/4">{reportData.evalDate} / {reportData.manager}</td></tr>
+                    <tr><th className="bg-slate-50 border-r p-2">해당 공정명</th><td className="p-2 border-r font-bold text-blue-800">{hood.processName || `후드 ${index+1}`}</td><th className="bg-slate-50 border-r p-2">취급물질</th><td className="p-2">{hood.material}</td></tr>
+                  </tbody>
+                </table>
+
+                <h2 className="text-base font-bold bg-slate-100 p-2 border-l-4 border-blue-600 mb-3">2. 후드 제원 및 설계 기준</h2>
+                <table className="w-full text-sm border-collapse mb-6 border border-slate-300">
+                  <tbody>
+                    <tr className="border-b border-slate-300"><th className="bg-slate-50 border-r p-2 w-1/4">후드 형식</th><td className="p-2 border-r w-1/4">{hood.hoodType}</td><th className="bg-slate-50 border-r p-2 w-1/4">법적 제어풍속</th><td className="p-2 w-1/4 font-bold">{hData.legalV} m/s 이상</td></tr>
+                    <tr className="border-b border-slate-300"><th className="bg-slate-50 border-r p-2">형태 및 플랜지</th><td className="p-2 border-r">{hood.hoodShape} / {hood.hasFlange ? '있음' : '없음'}</td><th className="bg-slate-50 border-r p-2">개구면적 (A)</th><td className="p-2">{hData.area.toFixed(3)} m²</td></tr>
+                    <tr><th className="bg-slate-50 border-r p-2">주요 치수</th><td colSpan="3" className="p-2">{hood.hoodShape === '장방형' ? `W: ${hood.width}m, L: ${hood.length}m` : `D: ${hood.diameter}m`} {hood.ductDiameter && ` / 덕트: ${hood.ductDiameter}mm`}</td></tr>
+                  </tbody>
+                </table>
+
+                <h2 className="text-base font-bold bg-slate-100 p-2 border-l-4 border-blue-600 mb-3">3. 성능 측정 결과</h2>
+                <div className="flex space-x-4 mb-4 text-center">
+                  <div className="flex-1 border p-3 bg-slate-50 rounded"><p className="text-xs mb-1">제어거리 (X)</p><p className="text-lg font-bold">{hood.controlDistance || 0} m</p></div>
+                  <div className="flex-1 border p-3 bg-slate-50 rounded"><p className="text-xs mb-1">측정 평균 풍속</p><p className={`text-lg font-bold ${hData.isPass ? 'text-blue-700' : 'text-red-600'}`}>{hData.avgVelocity.toFixed(2)} m/s</p></div>
+                  <div className="flex-1 border p-3 bg-slate-50 rounded"><p className="text-xs mb-1">필요 배기유량</p><p className="text-lg font-bold">{hData.requiredQ.toFixed(1)} CMM</p></div>
+                </div>
+                <table className="w-full text-sm border-collapse mb-6 border text-center">
+                  <thead><tr className="bg-slate-100 border-b"><th className="p-2 border-r">#1</th><th className="p-2 border-r">#2</th><th className="p-2 border-r">#3</th><th className="p-2 border-r">#4</th><th className="p-2 border-r">#5</th><th className="p-2 text-slate-500">전회 평균</th></tr></thead>
+                  <tbody><tr>{hood.faceVelocities.map((v, i) => <td key={i} className="p-2 border-r">{v||'-'}</td>)}<td className="p-2 text-slate-500">{hood.prevAvgVelocity||'-'}</td></tr></tbody>
+                </table>
+
+                <div style={{ pageBreakInside: 'avoid' }}>
+                  <h2 className="text-base font-bold bg-slate-100 p-2 border-l-4 border-blue-600 mb-3">4. 종합 평가</h2>
+                  <div className="border rounded p-4 mb-4 flex justify-between items-center">
+                    <span className="font-bold">판정 결과</span>
+                    <span className={`px-4 py-1 rounded text-white font-bold ${hData.isPass ? 'bg-green-600' : 'bg-red-600'}`}>{hData.isPass ? '적합' : '부적합'}</span>
+                  </div>
+                  {hood.comments && <div className="border p-3 mb-4"><h4 className="text-xs font-bold text-slate-500 mb-1">기술사 코멘트</h4><p className="text-sm">{hood.comments}</p></div>}
+                  {!hData.isPass && hood.aiSuggestion && <div className="border border-red-200 bg-red-50 p-3 mb-4"><h4 className="text-xs font-bold text-red-600 mb-1">AI 개선 대책</h4><p className="text-sm">{hood.aiSuggestion}</p></div>}
+                </div>
+
+                {(hood.images.hood || hood.images.fan) && (
+                  <div style={{ pageBreakInside: 'avoid', marginTop: '15px' }}>
+                     <h2 className="text-base font-bold bg-slate-100 p-2 border-l-4 border-blue-600 mb-3">5. 현장 사진</h2>
+                     <div className="flex space-x-4">
+                       {hood.images.hood && <div className="flex-1 border p-2 text-center"><img src={hood.images.hood} className="max-h-[200px] object-contain mx-auto" /><p className="text-xs mt-2 font-bold">후드 전경</p></div>}
+                       {hood.images.fan && <div className="flex-1 border p-2 text-center"><img src={hood.images.fan} className="max-h-[200px] object-contain mx-auto" /><p className="text-xs mt-2 font-bold">송풍기</p></div>}
+                     </div>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+      
+    </div>
+  );
+}
