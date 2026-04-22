@@ -26,10 +26,17 @@
         print-color-adjust: exact; 
         background-color: white !important; 
       }
-      html, body, #root {
+      /* 🖨️ 인쇄 시 빈 화면 방지를 위한 강제 레이아웃 초기화 */
+      html, body, #root, .print-force-block {
         height: auto !important;
+        min-height: auto !important;
+        max-height: none !important;
         overflow: visible !important;
+        display: block !important;
+        position: static !important;
       }
+      .print-hide { display: none !important; }
+      
       .page-break-inside-avoid { 
         page-break-inside: avoid; 
         break-inside: avoid; 
@@ -168,6 +175,14 @@
             setIsGeneratingPDF(false);
           }
         }, 100);
+      };
+
+      // 🖨️ 인쇄 기능 (빈 화면 방지를 위해 탭 전환 후 실행)
+      const handlePrint = () => {
+        setMobileTab('report');
+        setTimeout(() => {
+          window.print();
+        }, 150);
       };
 
       // 법정 제어풍속 자동 산출 로직
@@ -466,11 +481,11 @@
       const fanFairPct = totalEvalFans > 0 ? (fairFans / totalEvalFans) * 100 : 0;
 
       return (
-        <div className="flex flex-col h-screen bg-slate-100 font-sans text-slate-800 overflow-hidden print:block print:h-auto print:overflow-visible">
+        <div className="flex flex-col h-screen bg-slate-100 font-sans text-slate-800 overflow-hidden print-force-block">
           
           {/* PDF 로딩 오버레이 */}
           {isGeneratingPDF && (
-            <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center print:hidden">
+            <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center print-hide">
               <div className="bg-white p-6 rounded-lg shadow-2xl flex flex-col items-center">
                 <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
                 <h3 className="text-lg font-bold text-slate-800">PDF 문서 생성 중...</h3>
@@ -483,7 +498,7 @@
           <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={handleFileUpload} />
 
           {/* 전체 상단 헤더 (액션바) */}
-          <header className="flex-shrink-0 p-3 lg:p-4 bg-blue-800 text-white flex justify-between items-center z-20 print:hidden">
+          <header className="flex-shrink-0 p-3 lg:p-4 bg-blue-800 text-white flex justify-between items-center z-20 print-hide">
             <div>
               <h1 className="text-base lg:text-lg font-black flex items-center gap-1.5 lg:gap-2">
                 <Activity className="w-4 h-4 lg:w-5 lg:h-5" /> 
@@ -503,23 +518,23 @@
               <button onClick={handleSharePDF} className="p-2 bg-blue-700 hover:bg-blue-600 rounded text-white text-xs font-bold flex items-center gap-1 transition">
                 <Share2 className="w-4 h-4"/><span className="hidden sm:inline">PDF 공유</span>
               </button>
-              <button onClick={() => window.print()} className="p-2 bg-blue-700 hover:bg-blue-600 rounded text-white text-xs font-bold flex items-center gap-1 transition">
+              <button onClick={handlePrint} className="p-2 bg-blue-700 hover:bg-blue-600 rounded text-white text-xs font-bold flex items-center gap-1 transition">
                 <Printer className="w-4 h-4"/><span className="hidden sm:inline">출력</span>
               </button>
             </div>
           </header>
 
           {/* 모바일 하단/상단 탭 (핸드폰 사이즈 전용) */}
-          <div className="flex lg:hidden flex-shrink-0 bg-blue-900 text-white text-sm font-bold z-10 print:hidden shadow-md">
+          <div className="flex lg:hidden flex-shrink-0 bg-blue-900 text-white text-sm font-bold z-10 shadow-md print-hide">
             <button onClick={() => setMobileTab('edit')} className={`flex-1 py-3 transition-colors ${mobileTab === 'edit' ? 'bg-blue-600 border-b-4 border-white' : 'text-blue-300'}`}>입력 및 도면</button>
             <button onClick={() => setMobileTab('report')} className={`flex-1 py-3 transition-colors ${mobileTab === 'report' ? 'bg-blue-600 border-b-4 border-white' : 'text-blue-300'}`}>보고서 확인</button>
           </div>
 
           {/* 메인 작업 영역 */}
-          <div className="flex flex-1 overflow-hidden relative print:block print:overflow-visible print:h-auto">
+          <div className="flex flex-1 overflow-hidden relative print-force-block">
             
             {/* 좌측 패널 (입력 및 도면 컨트롤) */}
-            <div className={`w-full lg:w-[400px] flex-shrink-0 bg-white lg:border-r border-slate-200 shadow-xl z-10 flex flex-col h-full overflow-y-auto print:hidden ${mobileTab === 'edit' ? 'block' : 'hidden lg:flex'}`}>
+            <div className={`w-full lg:w-[400px] flex-shrink-0 bg-white lg:border-r border-slate-200 shadow-xl z-10 flex flex-col h-full overflow-y-auto print-hide ${mobileTab === 'edit' ? 'block' : 'hidden lg:flex'}`}>
               
               <div className="p-5 space-y-6">
                 <div>
@@ -811,26 +826,26 @@
                         </div>
                       </div>
 
-                      {selectedNodeCalc && (
-                        <div className={`p-3 rounded border font-bold text-sm flex items-center justify-between ${selectedNodeCalc.isGood ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : 'bg-red-50 border-red-300 text-red-700'}`}>
-                          <span className="flex items-center gap-1">
-                            {selectedNodeCalc.isGood ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
-                            {selectedNodeCalc.isGood ? '풍속 및 배기량 만족' : '기준 미달 (개선 필요)'}
-                          </span>
-                          <span>{selectedNodeCalc.currentQ} CMM</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                        {selectedNodeCalc && (
+                          <div className={`p-3 rounded border font-bold text-sm flex items-center justify-between ${selectedNodeCalc.isGood ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : 'bg-red-50 border-red-300 text-red-700'}`}>
+                            <span className="flex items-center gap-1">
+                              {selectedNodeCalc.isGood ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                              {selectedNodeCalc.isGood ? '풍속 및 배기량 만족' : '기준 미달 (개선 필요)'}
+                            </span>
+                            <span>{selectedNodeCalc.currentQ} CMM</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
 
             {/* 우측 패널 (보고서 영역) */}
-            <div className={`flex-1 bg-slate-200 overflow-y-auto relative p-4 lg:p-8 print:p-0 print:bg-white print:overflow-visible print:block ${mobileTab === 'report' ? 'block' : 'hidden lg:block'}`}>
+            <div className={`flex-1 bg-slate-200 overflow-y-auto relative p-4 lg:p-8 print-force-block ${mobileTab === 'report' ? 'block' : 'hidden lg:block'}`}>
               
               {/* html2pdf가 타겟팅 할 감싸는 영역 */}
-              <div id="report-content-wrapper" className="w-full max-w-[210mm] min-h-[297mm] mx-auto bg-white shadow-2xl p-[15mm] sm:p-[20mm] print:max-w-none print:min-h-0 print:shadow-none print:p-0 print:m-0">
+              <div id="report-content-wrapper" className="w-full max-w-[210mm] min-h-[297mm] mx-auto bg-white shadow-2xl p-[15mm] sm:p-[20mm] print-force-block">
                 
                 <div className="border-b-4 border-slate-800 pb-4 mb-6 text-center relative page-break-inside-avoid">
                   <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">국소배기장치 성능평가 보고서</h1>
