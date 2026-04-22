@@ -78,6 +78,7 @@
       const [representativeName, setRepresentativeName] = useState("");
       const [address, setAddress] = useState("");
       const [useLayout, setUseLayout] = useState(true); 
+      const [overallReview, setOverallReview] = useState(""); // 추가: 점검자 종합 의견
       
       // 도면 데이터
       const [nodes, setNodes] = useState([]);
@@ -100,7 +101,7 @@
 
       /* 데이터 파일 저장/불러오기 로직 */
       const handleSaveFile = () => {
-        const data = { factoryName, representativeName, address, useLayout, nodes, edges };
+        const data = { factoryName, representativeName, address, useLayout, overallReview, nodes, edges };
         const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -121,6 +122,7 @@
               setFactoryName(data.factoryName || "");
               setRepresentativeName(data.representativeName || "");
               setAddress(data.address || "");
+              setOverallReview(data.overallReview || "");
               setUseLayout(data.useLayout !== false);
               setNodes(data.nodes || []);
               setEdges(data.edges || []);
@@ -839,7 +841,22 @@
                     )}
                   </div>
                 </div>
+
+                <hr className="border-slate-100" />
+
+                {/* 4. 점검자 종합 의견 (총평) 입력 */}
+                <div className="pb-6">
+                  <h2 className="text-sm font-bold text-slate-400 mb-3">4. 점검자 종합 의견 (총평)</h2>
+                  <textarea
+                    value={overallReview}
+                    onChange={e => setOverallReview(e.target.value)}
+                    placeholder="사업장의 국소배기장치 성능 상태 및 개선 권고 사항을 자유롭게 작성해주세요."
+                    className="w-full p-3 border border-slate-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 min-h-[120px] resize-y bg-white"
+                  ></textarea>
+                </div>
+
               </div>
+            </div>
 
             {/* 우측 패널 (보고서 영역) */}
             <div className={`flex-1 bg-slate-200 overflow-y-auto relative p-4 lg:p-8 print-force-block ${mobileTab === 'report' ? 'block' : 'hidden lg:block'}`}>
@@ -1206,6 +1223,22 @@
                     </div>
                   </div>
                 )}
+
+                {/* 점검자 종합 의견 출력란 */}
+                <div className="border-t-2 border-slate-800 pt-6 mt-6 page-break-inside-avoid">
+                  <h2 className="text-lg font-black border-l-4 border-slate-700 pl-2 mb-4">
+                    {(() => {
+                      let idx = useLayout ? 1 : 0;
+                      idx++; // 후드 배기
+                      if (fansData.length > 0) idx++; // 송풍기
+                      if (hoodsData.length > 0 || fansData.length > 0) idx++; // 종합평가
+                      return ++idx;
+                    })()}. 점검자 종합 의견 (총평)
+                  </h2>
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-6 min-h-[100px] whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
+                    {overallReview || <span className="text-slate-400">입력된 종합 의견이 없습니다.</span>}
+                  </div>
+                </div>
 
               </div>
             </div>
