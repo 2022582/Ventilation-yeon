@@ -121,6 +121,7 @@
       const [address, setAddress] = useState("");
       const [useLayout, setUseLayout] = useState(true); 
       const [overallReview, setOverallReview] = useState(""); // 점검자 종합 의견
+      const [overallReviewImage, setOverallReviewImage] = useState(null); // 첨부 이미지 추가
       
       // 도면 데이터
       const [nodes, setNodes] = useState([]);
@@ -143,7 +144,7 @@
 
       /* 데이터 파일 저장/불러오기 로직 */
       const handleSaveFile = () => {
-        const data = { factoryName, representativeName, address, useLayout, overallReview, nodes, edges };
+        const data = { factoryName, representativeName, address, useLayout, overallReview, overallReviewImage, nodes, edges };
         const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -165,6 +166,7 @@
               setRepresentativeName(data.representativeName || "");
               setAddress(data.address || "");
               setOverallReview(data.overallReview || "");
+              setOverallReviewImage(data.overallReviewImage || null);
               setUseLayout(data.useLayout !== false);
               setNodes(data.nodes || []);
               setEdges(data.edges || []);
@@ -460,6 +462,15 @@
         if (file) {
           const reader = new FileReader();
           reader.onload = (ev) => updateNodeData('photo', ev.target.result);
+          reader.readAsDataURL(file);
+        }
+      };
+
+      const handleReviewPhotoUpload = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = (ev) => setOverallReviewImage(ev.target.result);
           reader.readAsDataURL(file);
         }
       };
@@ -895,6 +906,18 @@
                     placeholder="사업장의 국소배기장치 성능 상태 및 개선 권고 사항을 자유롭게 작성해주세요."
                     className="w-full p-3 border border-slate-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 min-h-[120px] resize-y bg-white"
                   ></textarea>
+                  <div className="mt-3">
+                    <label className="flex bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded p-2 justify-center items-center gap-2 cursor-pointer transition-colors text-sm font-bold w-full">
+                      <Camera className="w-4 h-4 text-slate-600" /> 스케치 또는 수기 자료 촬영/첨부
+                      <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleReviewPhotoUpload} />
+                    </label>
+                    {overallReviewImage && (
+                      <div className="mt-2 relative rounded overflow-hidden border border-slate-200">
+                        <img src={overallReviewImage} alt="첨부 자료" className="w-full object-contain max-h-64 bg-slate-50" />
+                        <button onClick={() => setOverallReviewImage(null)} className="absolute top-2 right-2 bg-red-500 text-white rounded-full p-1 shadow"><XCircle className="w-4 h-4" /></button>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
               </div>
@@ -1279,6 +1302,12 @@
                   </h2>
                   <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-6 min-h-[100px] whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
                     {overallReview || <span className="text-slate-400">입력된 종합 의견이 없습니다.</span>}
+                    {overallReviewImage && (
+                      <div className="mt-4 pt-4 border-t border-slate-200 print:border-t-2 print:border-slate-300 page-break-inside-avoid">
+                        <span className="text-xs font-bold text-slate-500 mb-2 block">▶ 첨부 자료 (현장 스케치 및 수기 기록)</span>
+                        <img src={overallReviewImage} alt="종합 의견 첨부 자료" className="max-w-full h-auto rounded border border-slate-300 shadow-sm mx-auto object-contain max-h-[600px]" />
+                      </div>
+                    )}
                   </div>
                 </div>
 
