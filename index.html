@@ -131,11 +131,12 @@
 
       /* PDF 생성 및 모바일 카카오톡/앱 공유 로직 */
       const handleSharePDF = async () => {
+        setMobileTab('report'); // 모바일에서 '입력' 탭일 때 캡처하면 빈 화면이 나오는 현상 방지
         setIsGeneratingPDF(true);
-        const element = document.getElementById('report-content-wrapper');
         
         // UI 렌더링 후 PDF 생성을 위해 약간의 딜레이
         setTimeout(async () => {
+          const element = document.getElementById('report-content-wrapper');
           const opt = {
             margin:       10,
             filename:     `국소배기보고서_${factoryName || '사업장'}.pdf`,
@@ -515,7 +516,7 @@
           </div>
 
           {/* 메인 작업 영역 */}
-          <div className="flex flex-1 overflow-hidden relative">
+          <div className="flex flex-1 overflow-hidden relative print:block print:overflow-visible print:h-auto">
             
             {/* 좌측 패널 (입력 및 도면 컨트롤) */}
             <div className={`w-full lg:w-[400px] flex-shrink-0 bg-white lg:border-r border-slate-200 shadow-xl z-10 flex flex-col h-full overflow-y-auto print:hidden ${mobileTab === 'edit' ? 'block' : 'hidden lg:flex'}`}>
@@ -826,7 +827,7 @@
             </div>
 
             {/* 우측 패널 (보고서 영역) */}
-            <div className={`flex-1 bg-slate-200 overflow-y-auto relative p-4 lg:p-8 print:p-0 print:bg-white print:overflow-visible ${mobileTab === 'report' ? 'block' : 'hidden lg:block'}`}>
+            <div className={`flex-1 bg-slate-200 overflow-y-auto relative p-4 lg:p-8 print:p-0 print:bg-white print:overflow-visible print:block ${mobileTab === 'report' ? 'block' : 'hidden lg:block'}`}>
               
               {/* html2pdf가 타겟팅 할 감싸는 영역 */}
               <div id="report-content-wrapper" className="w-full max-w-[210mm] min-h-[297mm] mx-auto bg-white shadow-2xl p-[15mm] sm:p-[20mm] print:max-w-none print:min-h-0 print:shadow-none print:p-0 print:m-0">
