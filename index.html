@@ -261,7 +261,7 @@
                 { name: '배풍기', items: [ { id: 'fanApp', name: '외관', desc: '케이싱, 임펠러, 모터 파손, 부식 등' }, { id: 'fanBelt', name: '벨트', desc: '벨트의 헐거움, 베어링의 마모 등' }, { id: 'fanConn', name: '연결부', desc: '송풍기 연결부(캔버스) 파손 등으로 인한 공기유입 여부' } ]}
             ];
 
-            const editorSvgRef = useRef(null); // Fix: Use separate ref for editor
+            const editorSvgRef = useRef(null);
             const fileInputRef = useRef(null);
 
             useEffect(() => {
@@ -343,8 +343,9 @@
             // 다중설비(Lay-out) 핸들러 축약
             const getMousePos = (e) => { 
                 if (!useLayout || !editorSvgRef.current) return { rawX: 0, rawY: 0, x: 0, y: 0 }; 
-                const svg = editorSvgRef.current; // Fix: Use editorSvgRef specifically
+                const svg = editorSvgRef.current; 
                 const CTM = svg.getScreenCTM(); 
+                if (!CTM) return { rawX: 0, rawY: 0, x: 0, y: 0 }; 
                 let clientX = e.clientX, clientY = e.clientY; 
                 if (e.touches && e.touches.length > 0) { clientX = e.touches[0].clientX; clientY = e.touches[0].clientY; } 
                 const rawX = (clientX - CTM.e) / CTM.a; 
@@ -363,6 +364,8 @@
             const deleteSelected = () => { if (selectedNodeId) { setNodes(nodes.filter(n => n.id !== selectedNodeId)); setEdges(edges.filter(e => e.from !== selectedNodeId && e.to !== selectedNodeId)); setSelectedNodeId(null); } else if (selectedEdgeId) { setEdges(edges.filter(e => e.id !== selectedEdgeId)); setSelectedEdgeId(null); } };
             const updateNodeData = (field, value) => { if (!selectedNodeId) return; setNodes(prev => prev.map(n => { if (n.id === selectedNodeId) { let newData = { ...n.data, [field]: value }; if (field === 'hoodType' && value !== 'enclosure') newData.isPermitted = false; if (['hoodType', 'materialState', 'isPermitted'].includes(field) || (field === 'hoodType' && newData.isPermitted)) { newData.controlVelocity = getAutoControlVelocity(newData.hoodType, newData.materialState, newData.isPermitted || false); } if (field === 'hasPurifier' && !value) { newData.purifierType = "bag_filter"; newData.purifierDiffPress = ""; } return { ...n, data: newData }; } return n; })); };
             const handlePhotoUpload = (e) => { const file = e.target.files[0]; if (file) { const reader = new FileReader(); reader.onload = (ev) => updateNodeData('photo', ev.target.result); reader.readAsDataURL(file); } };
+            // FIX: 추가된 총평 이미지 업로드 핸들러
+            const handleReviewPhotoUpload = (e) => { const file = e.target.files[0]; if (file) { const reader = new FileReader(); reader.onload = (ev) => setOverallReviewImage(ev.target.result); reader.readAsDataURL(file); } };
 
             const calculateResult = (data) => { const { hoodType, distanceX, controlVelocity, measuredControlVelocity, shape, width, height, diameter, measuredVelocity, openingWidth, openingHeight } = data; let area = shape === 'rect' ? (parseFloat(width) || 0) * (parseFloat(height) || 0) : Math.PI * Math.pow(((parseFloat(diameter) || 0) / 1000) / 2, 2); const vc = parseFloat(controlVelocity) || 0, vmc = parseFloat(measuredControlVelocity) || 0, vm = parseFloat(measuredVelocity) || 0, x = parseFloat(distanceX) || 0; let openingArea = (parseFloat(openingWidth) || 0) * (parseFloat(openingHeight) || 0); let requiredQ = hoodType === 'enclosure' ? 60 * vc * openingArea : 60 * vc * (10 * Math.pow(x, 2) + area); const currentQ = 60 * vm * area; const isVelocityGood = vmc >= vc; const isVolumeGood = currentQ >= requiredQ; const isGood = isVelocityGood && isVolumeGood && currentQ > 0; return { area: area.toFixed(3), openingArea: openingArea.toFixed(3), requiredQ: requiredQ.toFixed(2), currentQ: currentQ.toFixed(2), isVelocityGood, isVolumeGood, isGood }; };
             const hoodsData = useMemo(() => { return nodes.filter(n => n.type === 'hood').map(n => { return { ...n, calc: calculateResult(n.data) }; }); }, [nodes]);
@@ -405,7 +408,7 @@
 
                 if (hazardNodes.length > 0) {
                     let issues = hazardNodes.map(h => `[${h.data.processName || '미상 공정'}] 공정은 관리대상 유해물질(${h.data.hazardName || '미상 유해물질'})을 취급하고 있으나, 현재 국소배기장치가 미설치된 상태입니다.`);
-                    diagnostics.push({ type: 'system', name: '국소배기장치 미설치 공정', status: 'danger', issues: issues, solutions: [ '작업자 건강 장해 예방 및 산업안전보건법령 준수를 위해, 해당 공정의 비산 특성에 맞는 적절한 국소배기장치(포위식 또는 외부식 후드 등)를 조속히 신규 설치할 것을 강력히 권고합니다.', '설비 신설 전까지는 전체환기장치 가동을 극대화하고, 작업자에게 적격한 호흡용 보호구(방독마스크 등)를 반드시 지급 및 착용토록 관리하시기 바랍니다.' ], references: ['산업안전보건기준에 관한 규칙 제422조 (관리대상 유해물질과 관련된 설비의 배기장치)'] });
+                    diagnostics.push({ type: 'system', name: '국소배기장 미설치 공정', status: 'danger', issues: issues, solutions: [ '작업자 건강 장해 예방 및 산업안전보건법령 준수를 위해, 해당 공정의 비산 특성에 맞는 적절한 국소배기장치(포위식 또는 외부식 후드 등)를 조속히 신규 설치할 것을 강력히 권고합니다.', '설비 신설 전까지는 전체환기장치 가동을 극대화하고, 작업자에게 적격한 호흡용 보호구(방독마스크 등)를 반드시 지급 및 착용토록 관리하시기 바랍니다.' ], references: ['산업안전보건기준에 관한 규칙 제422조 (관리대상 유해물질과 관련된 설비의 배기장치)'] });
                 }
 
                 let visualIssuesGrouped = {};
@@ -1118,10 +1121,10 @@
                                                                             </th>
                                                                             <td className="border-r border-slate-100 p-2.5 w-[20%] font-black align-middle">
                                                                                 <div className="flex gap-4 justify-center">
-                                                                                    <span className={evaluationData.visual[item.id] === '양호' ? 'text-[#3b82f6]' : 'text-slate-300'}>
+                                                                                    <span className={evaluationData.visual[item.id] === '양호' ? 'text-[#3b82f6] cursor-pointer' : 'text-slate-300 cursor-pointer'} onClick={() => updateEval('visual', item.id, '양호')}>
                                                                                         {evaluationData.visual[item.id] === '양호' ? '☑ 양호' : '☐ 양호'}
                                                                                     </span>
-                                                                                    <span className={evaluationData.visual[item.id] === '미흡' ? 'text-red-500' : 'text-slate-300'}>
+                                                                                    <span className={evaluationData.visual[item.id] === '미흡' ? 'text-red-500 cursor-pointer' : 'text-slate-300 cursor-pointer'} onClick={() => updateEval('visual', item.id, '미흡')}>
                                                                                         {evaluationData.visual[item.id] === '미흡' ? '☑ 미흡' : '☐ 미흡'}
                                                                                     </span>
                                                                                 </div>
@@ -1207,20 +1210,831 @@
                                                                 </td>
                                                             </tr>
                                                             <tr className="border-b border-slate-100 bg-white">
-                                                                <td className="p-2.5 px-4">
+                                                                <td colSpan="3" className="p-2.5 px-4">
                                                                     <div className="flex justify-between items-center w-full">
                                                                         <span className="text-slate-600 font-medium break-keep"><b className="font-bold text-slate-800 mr-1">• 흡인 속도:</b> 연기가 흡인되는 속도가 매우 빠름</span>
-                                                                        <span className={`font-bold text-sm ml-2 ${evaluationData.airflow.speedChecked ? 'text-[#3b82f6]' : 'text-slate-300'}`}>
+                                                                        <span className={`font-bold text-sm ml-2 cursor-pointer ${evaluationData.airflow.speedChecked ? 'text-[#3b82f6]' : 'text-slate-300'}`} onClick={() => updateEval('airflow', 'speedChecked', !evaluationData.airflow.speedChecked)}>
                                                                             {evaluationData.airflow.speedChecked ? '☑' : '☐'}
                                                                         </span>
                                                                     </div>
                                                                 </td>
                                                             </tr>
                                                             <tr className="bg-white">
-                                                                <td className="p-2.5 px-4">
+                                                                <td colSpan="3" className="p-2.5 px-4">
                                                                     <div className="flex justify-between items-center w-full">
                                                                         <span className="text-slate-600 font-medium break-keep"><b className="font-bold text-slate-800 mr-1">• 흡인 상태:</b> 연기가 확산되지 않고 모두 흡인</span>
-                                                                        <span className={`font-bold text-sm ml-2 ${evaluationData.airflow.statusChecked ? 'text-[#3b82f6]' : 'text-slate-300'}`}>
+                                                                        <span className={`font-bold text-sm ml-2 cursor-pointer ${evaluationData.airflow.statusChecked ? 'text-[#3b82f6]' : 'text-slate-300'}`} onClick={() => updateEval('airflow', 'statusChecked', !evaluationData.airflow.statusChecked)}>
+                                                                            {evaluationData.airflow.statusChecked ? '☑' : '☐'}
+                                                                        </span>
+                                                                    </div>
+                                                                </td>
+                                                            </tr>
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {activeMenu === 'smart' && (
+                                        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+                                            <div className="flex justify-between items-center bg-blue-50 p-4 rounded-xl border border-blue-100">
+                                                <div>
+                                                    <h3 className="text-sm font-black text-slate-800 flex items-center gap-2">
+                                                        <ZapIcon className="w-4 h-4 text-[#3b82f6]" /> AI 기반 스마트 진단
+                                                    </h3>
+                                                    <p className="text-[11px] text-slate-500 mt-1">입력된 제원 및 측정값을 바탕으로 최적화 방안을 추천합니다.</p>
+                                                </div>
+                                                <button onClick={runSmartDiagnostics} className="px-4 py-2 bg-[#3b82f6] hover:bg-blue-600 text-white rounded-lg text-xs font-bold transition shadow-sm whitespace-nowrap">
+                                                    진단 실행
+                                                </button>
+                                            </div>
+
+                                            {smartDiagnostics && smartDiagnostics.length > 0 ? (
+                                                <div className="space-y-4 pb-8">
+                                                    {smartDiagnostics.map((diag, idx) => (
+                                                        <div key={idx} className={`p-4 rounded-xl border ${diag.status === 'success' ? 'bg-emerald-50/50 border-emerald-200' : diag.status === 'danger' ? 'bg-red-50/50 border-red-200' : diag.status === 'info' ? 'bg-slate-50 border-slate-200' : 'bg-orange-50/50 border-orange-200'}`}>
+                                                            <h4 className={`text-sm font-black mb-2 flex items-center gap-2 ${diag.status === 'success' ? 'text-emerald-700' : diag.status === 'danger' ? 'text-red-700' : diag.status === 'info' ? 'text-slate-700' : 'text-orange-700'}`}>
+                                                                {diag.status === 'success' ? <CheckCircle2 className="w-4 h-4" /> : diag.status === 'info' ? <InfoIcon className="w-4 h-4" /> : <ZapIcon className="w-4 h-4" />}
+                                                                [{diag.type === 'hood' ? '후드' : diag.type === 'fan' ? '송풍기' : '시스템'}] {diag.name}
+                                                            </h4>
+                                                            
+                                                            {diag.issues.length > 0 && (
+                                                                <div className="mb-3 space-y-1.5">
+                                                                    {diag.issues.map((issue, i) => (
+                                                                        <p key={i} className="text-xs text-slate-600 font-bold flex items-start gap-1.5 break-keep"><span className="text-red-400 mt-0.5">•</span> {issue}</p>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                            {diag.solutions.length > 0 && (
+                                                                <div className={`p-3 rounded-lg space-y-1.5 ${diag.status === 'success' ? 'bg-emerald-100/50' : 'bg-white'}`}>
+                                                                    <p className="text-[10px] font-black text-slate-400 mb-1.5">AI 솔루션 제안</p>
+                                                                    {diag.solutions.map((sol, i) => (
+                                                                        <p key={i} className="text-xs text-slate-700 font-bold flex items-start gap-1.5 break-keep leading-relaxed"><span className="text-[#3b82f6] mt-0.5">▶</span> {sol}</p>
+                                                                    ))}
+                                                                    {diag.references && diag.references.length > 0 && (
+                                                                        <div className="mt-2 pt-2 border-t border-slate-100/50 flex flex-wrap gap-1.5">
+                                                                            {diag.references.map((ref, i) => (
+                                                                                <span key={i} className="bg-slate-100/80 text-slate-500 text-[9px] px-1.5 py-0.5 rounded-md font-bold border border-slate-200">📘 {ref}</span>
+                                                                            ))}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                 <div className="flex flex-col items-center justify-center py-10 text-center">
+                                                    <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mb-3">
+                                                        <Activity className="w-8 h-8 text-slate-300" />
+                                                    </div>
+                                                    <p className="text-sm font-bold text-slate-400">상단의 '진단 실행' 버튼을 눌러<br/>데이터 분석을 시작하세요.</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {activeMenu === 'review' && (
+                                        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
+                                            <div>
+                                                <h3 className="text-sm font-bold text-slate-800 mb-3 border-l-4 border-[#3b82f6] pl-2">점검자 총평</h3>
+                                                <textarea
+                                                    value={overallReview}
+                                                    onChange={e => setOverallReview(e.target.value)}
+                                                    placeholder="성능 상태 및 개선 권고 사항 입력"
+                                                    className="w-full p-3.5 border border-slate-200 bg-slate-50 rounded-xl text-sm font-medium outline-none focus:bg-white focus:ring-2 focus:ring-[#3b82f6] min-h-[150px] resize-y transition-all"
+                                                ></textarea>
+                                                <div className="mt-4">
+                                                    <label className="w-full bg-slate-50 hover:bg-slate-100 border border-slate-200 border-dashed rounded-xl p-4 flex justify-center items-center gap-2 cursor-pointer transition-colors text-sm font-bold text-slate-500">
+                                                        <Camera className="w-5 h-5" /> 스케치 자료 첨부
+                                                        {/* FIX: 파일 업로드 이벤트 연결 수정 완료 */}
+                                                        <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleReviewPhotoUpload} />
+                                                    </label>
+                                                    {overallReviewImage && (
+                                                        <div className="mt-4 relative rounded-xl overflow-hidden border border-slate-200 shadow-sm">
+                                                            <img src={overallReviewImage} alt="첨부 자료" className="w-full object-contain max-h-48 bg-white" />
+                                                            <button onClick={() => setOverallReviewImage(null)} className="absolute top-2 right-2 bg-slate-900/60 hover:bg-slate-900 text-white rounded-full p-1.5 backdrop-blur-sm transition-colors"><XCircle className="w-4 h-4" /></button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                    
+                                    {activeMenu === 'guide' && (
+                                        <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2">
+                                            <div>
+                                                <h3 className="text-sm font-bold text-slate-800 mb-2 border-l-4 border-[#3b82f6] pl-2">가이드라인 첨부</h3>
+                                                <p className="text-[11px] text-slate-500 mb-4 font-medium">보고서에 첨부할 작업 종류를 다중 선택하세요.</p>
+                                                <div className="grid grid-cols-1 gap-2.5">
+                                                    {KOSHA_GUIDES.map(guide => {
+                                                        const isSelected = selectedGuides.includes(guide.id);
+                                                        return (
+                                                            <button 
+                                                                key={guide.id}
+                                                                onClick={() => {
+                                                                    if (isSelected) setSelectedGuides(selectedGuides.filter(id => id !== guide.id));
+                                                                    else setSelectedGuides([...selectedGuides, guide.id]);
+                                                                }}
+                                                                className={`p-3 text-[12px] font-bold text-left rounded-xl border transition-all ${isSelected ? 'bg-emerald-50 text-emerald-700 border-emerald-400 shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-50 border-slate-200'}`}
+                                                            >
+                                                                <div className="flex items-center gap-2">
+                                                                    {isSelected ? <CheckCircle2 className="w-4 h-4 flex-shrink-0" /> : <Square className="w-4 h-4 text-slate-300 flex-shrink-0" />}
+                                                                    <span className="truncate">{guide.title}</span>
+                                                                </div>
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* --- 우측 패널 (보고서 영역) 및 퀵 진단 결과 패널 교차 노출 --- */}
+                            
+                            {/* 🚀 단일 후드 퀵 설계 결과 패널 */}
+                            {activeMenu === 'quick' && mobileTab === 'edit' ? (
+                                <div className="hidden lg:block flex-1 bg-slate-800 rounded-2xl shadow-xl overflow-y-auto relative p-8 print-hide text-white">
+                                    <h3 className="text-lg font-black mb-6 flex items-center gap-2 text-orange-400">
+                                        <Activity className="w-6 h-6" /> 실시간 설계 및 진단 결과 리포트
+                                    </h3>
+                                    {!quickResult ? (
+                                        <div className="py-20 text-center text-slate-400 text-sm font-medium border-2 border-dashed border-slate-600 rounded-2xl">
+                                            좌측에 후드 크기 등 제원을 입력하면<br/>자동으로 설계 및 진단 결과가 산출됩니다.
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-6 max-w-xl mx-auto animate-in fade-in zoom-in-95">
+                                            
+                                            <div className="bg-slate-700/50 p-6 rounded-2xl border border-slate-600 shadow-sm">
+                                                <div className="text-xs text-slate-400 font-bold mb-2">법적 기준에 따른 요구 송풍량</div>
+                                                <div className="text-4xl font-black text-white">{quickResult.reqQ} <span className="text-xl font-bold text-slate-400">CMM</span></div>
+                                                <div className="mt-3 text-[11px] text-slate-400 flex items-center gap-2">
+                                                    <span className="bg-slate-600 px-2 py-1 rounded">제어풍속: {getAutoControlVelocity(quickData.hoodType, quickData.materialState, quickData.isPermitted)} m/s 적용</span>
+                                                </div>
+                                            </div>
+
+                                            <div className="grid grid-cols-2 gap-4">
+                                                <div className="bg-slate-700/50 p-5 rounded-2xl border border-slate-600 shadow-sm">
+                                                    <div className="text-xs text-slate-400 font-bold mb-2">최적 덕트 직경 (추천)</div>
+                                                    <div className="text-2xl font-black text-emerald-400">Ø {quickResult.standardD} <span className="text-sm font-bold text-slate-400">mm</span></div>
+                                                </div>
+                                                <div className="bg-slate-700/50 p-5 rounded-2xl border border-slate-600 shadow-sm">
+                                                    <div className="text-xs text-slate-400 font-bold mb-2">설계 반송 속도</div>
+                                                    <div className="text-2xl font-black text-emerald-400">{quickResult.actualVd} <span className="text-sm font-bold text-slate-400">m/s</span></div>
+                                                </div>
+                                            </div>
+
+                                            <div className="bg-slate-700/50 p-6 rounded-2xl border border-slate-600 shadow-sm">
+                                                <div className="text-xs text-slate-400 font-bold mb-3 flex justify-between items-center">
+                                                    <span>송풍기 소요 정압 추정 (10% 안전율 포함)</span>
+                                                    <span className="text-2xl text-orange-400 font-black">{quickResult.totalSP} <span className="text-sm text-slate-400">mmAq</span></span>
+                                                </div>
+                                                <div className="flex h-4 bg-slate-800 rounded-full overflow-hidden mt-2">
+                                                    <div className="bg-[#3b82f6] h-full transition-all" style={{width: `${(quickResult.hoodSP/quickResult.totalSP)*100}%`}} title="후드손실"></div>
+                                                    <div className="bg-orange-400 h-full transition-all" style={{width: `${(quickResult.ductSP/quickResult.totalSP)*100}%`}} title="배관손실"></div>
+                                                    {quickData.hasPurifier && <div className="bg-emerald-400 h-full transition-all" style={{width: `${(quickResult.purifierSP/quickResult.totalSP)*100}%`}} title="정화장치"></div>}
+                                                </div>
+                                                <div className="flex justify-between text-[10px] mt-2 text-slate-400 font-bold">
+                                                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#3b82f6]"></span> 후드 {quickResult.hoodSP}</span>
+                                                    <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-400"></span> 덕트/엘보 {quickResult.ductSP}</span>
+                                                    {quickData.hasPurifier && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400"></span> 집진기 {quickResult.purifierSP}</span>}
+                                                </div>
+                                            </div>
+
+                                            {(quickData.currentFanQ || quickData.currentFanSP) && (
+                                                <div className={`p-6 rounded-2xl border-2 shadow-lg ${quickResult.isQGood && quickResult.isSPGood ? 'bg-emerald-900/30 border-emerald-500' : 'bg-red-900/30 border-red-500'}`}>
+                                                    <h4 className="text-sm font-black mb-4 flex items-center gap-2">
+                                                        {quickResult.isQGood && quickResult.isSPGood ? <CheckCircle2 className="text-emerald-400 w-5 h-5"/> : <AlertTriangle className="text-red-400 w-5 h-5"/>}
+                                                        기존 송풍기 적합성 판정
+                                                    </h4>
+                                                    <div className="grid grid-cols-2 gap-4">
+                                                        <div className="bg-slate-800/50 p-3 rounded-xl text-center">
+                                                            <div className="text-[10px] text-slate-400 mb-1">풍량 평가</div>
+                                                            <div className={`text-base font-black ${quickResult.isQGood ? 'text-emerald-400' : 'text-red-400'}`}>{quickResult.isQGood ? '✔ 용량 충분' : '✖ 용량 부족'}</div>
+                                                        </div>
+                                                        <div className="bg-slate-800/50 p-3 rounded-xl text-center">
+                                                            <div className="text-[10px] text-slate-400 mb-1">정압 평가</div>
+                                                            <div className={`text-base font-black ${quickResult.isSPGood ? 'text-emerald-400' : 'text-red-400'}`}>{quickResult.isSPGood ? '✔ 압력 충분' : '✖ 정압 부족'}</div>
+                                                        </div>
+                                                    </div>
+                                                    {(!quickResult.isQGood || !quickResult.isSPGood) && (
+                                                        <div className="mt-4 text-xs text-red-200 leading-relaxed bg-red-950/50 p-3 rounded-lg border border-red-900">
+                                                            현재 송풍기는 법적 기준 풍속을 달성하기에 사양이 부족합니다. 최소 <strong className="text-white text-sm">{quickResult.reqQ} CMM, {quickResult.totalSP} mmAq</strong> 이상의 신규 송풍기로 교체를 강력히 권장합니다.
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <div id="report-panel" className={`flex-1 bg-white lg:rounded-2xl lg:shadow-sm lg:border border-slate-200 overflow-y-auto relative p-4 lg:p-8 print-force-block ${mobileTab === 'report' ? 'block' : 'hidden lg:block'}`}>
+                                    <div id="report-content-wrapper" className="w-full max-w-[210mm] min-h-[297mm] mx-auto bg-white p-4 sm:p-[20mm] print-force-block text-slate-800 flex flex-col">
+                                        
+                                        {/* 표지 (Cover Page) */}
+                                        <div className="cover-page page-break-after-always flex flex-col min-h-[260mm]">
+                                            <div className="border-b-[4px] border-slate-800 pb-10 mb-12 text-center relative page-break-inside-avoid">
+                                                <h1 className="text-3xl sm:text-[42px] font-black text-slate-900 tracking-tight leading-tight">국소배기장치<br/>성능평가 보고서</h1>
+                                                <div className="mt-8 flex flex-col items-center gap-1">
+                                                    <p className="text-sm sm:text-base text-slate-600 font-bold break-keep px-4">
+                                                        ※ 본 보고서는 법적 효력이 없는 참고용 자료입니다.
+                                                    </p>
+                                                    <p className="text-xs sm:text-sm text-slate-500 font-medium break-keep px-4">
+                                                        제시된 개선 사항은 참고용이며, 실제 설비 개선 시에는 전문가의 정밀 진단을 권장합니다.
+                                                    </p>
+                                                </div>
+                                            </div>
+
+                                            <div className="mb-10 page-break-inside-avoid w-full max-w-3xl mx-auto">
+                                                <h2 className="text-lg sm:text-xl font-black border-l-[4px] border-[#3b82f6] pl-3 mb-6 text-slate-800">사업장 현황</h2>
+                                                <table className="w-full border-collapse border border-slate-300 text-sm sm:text-base">
+                                                    <tbody>
+                                                        <tr>
+                                                            <th className="bg-slate-100 border border-slate-300 p-4 w-[20%] text-center font-bold text-slate-700">사업장명</th>
+                                                            <td className="border border-slate-300 p-4 w-[30%] text-center font-black text-slate-900 text-lg bg-white">{factoryName || "미입력"}</td>
+                                                            <th className="bg-slate-100 border border-slate-300 p-4 w-[20%] text-center font-bold text-slate-700">대표자</th>
+                                                            <td className="border border-slate-300 p-4 w-[30%] text-center font-black text-slate-900 text-lg bg-white">{representativeName || "미입력"}</td>
+                                                        </tr>
+                                                        <tr>
+                                                            <th className="bg-slate-100 border border-slate-300 p-4 text-center font-bold text-slate-700">업종</th>
+                                                            <td className="border border-slate-300 p-4 font-black text-slate-900 text-center text-lg bg-white">{industryType || "미입력"}</td>
+                                                            <th className="bg-slate-100 border border-slate-300 p-4 text-center font-bold text-slate-700">소재지</th>
+                                                            <td className="border border-slate-300 p-4 font-black text-slate-900 text-center text-lg bg-white">{address || "미입력"}</td>
+                                                        </tr>
+                                                        <tr>
+                                                            <th className="bg-slate-100 border border-slate-300 p-4 text-center font-bold text-slate-700">측정일자</th>
+                                                            <td colSpan="3" className="border border-slate-300 p-4 font-black text-slate-900 text-center text-lg bg-white">
+                                                                {measurementDate ? `${measurementDate} (${measurementDuration}일간)` : "미입력"}
+                                                            </td>
+                                                        </tr>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+
+                                            <div className="mt-auto flex justify-end page-break-inside-avoid w-full">
+                                                <table className="border-collapse border-[2px] border-slate-800 text-[10px] w-[220px]">
+                                                    <tbody>
+                                                        <tr>
+                                                            <th rowSpan="2" className="bg-slate-100 border border-slate-800 p-1 w-6 text-center font-black text-slate-800 align-middle">결<br/>재</th>
+                                                            <th className="bg-slate-100 border border-slate-800 p-1 text-center font-bold text-slate-800 w-[30%]">평가자</th>
+                                                            <th className="bg-slate-100 border border-slate-800 p-1 text-center font-bold text-slate-800 w-[30%]">보건관리자</th>
+                                                            <th className="bg-slate-100 border border-slate-800 p-1 text-center font-bold text-slate-800 w-[30%]">근로자대표</th>
+                                                        </tr>
+                                                        <tr>
+                                                            <td className="border border-slate-800 h-[50px] text-center bg-white relative cursor-pointer hover:bg-blue-50/50 transition-colors" onClick={() => setSignModal({isOpen: true, role: 'evaluator'})}>
+                                                                {signatures.evaluator ? <img src={signatures.evaluator} className="w-full h-full object-contain absolute inset-0 p-0.5" alt="평가자 서명" /> : <span className="text-slate-300 font-bold text-[9px] print-hide">클릭 서명</span>}
+                                                            </td>
+                                                            <td className="border border-slate-800 h-[50px] text-center bg-white relative cursor-pointer hover:bg-blue-50/50 transition-colors" onClick={() => setSignModal({isOpen: true, role: 'manager'})}>
+                                                                {signatures.manager ? <img src={signatures.manager} className="w-full h-full object-contain absolute inset-0 p-0.5" alt="보건관리자 서명" /> : <span className="text-slate-300 font-bold text-[9px] print-hide">클릭 서명</span>}
+                                                            </td>
+                                                            <td className="border border-slate-800 h-[50px] text-center bg-white relative cursor-pointer hover:bg-blue-50/50 transition-colors" onClick={() => setSignModal({isOpen: true, role: 'worker'})}>
+                                                                {signatures.worker ? <img src={signatures.worker} className="w-full h-full object-contain absolute inset-0 p-0.5" alt="근로자 대표 서명" /> : <span className="text-slate-300 font-bold text-[9px] print-hide">클릭 서명</span>}
+                                                            </td>
+                                                        </tr>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                        
+                                        {/* 🚀 단일 후드 퀵 리포트 출력 */}
+                                        {quickResult && (
+                                            <div className="mb-10 page-break-inside-avoid">
+                                                <h2 className="text-base font-black border-l-[3px] border-[#3b82f6] pl-2.5 mb-3 text-slate-800">
+                                                    {sIdx.quick}. [단일 후드] 퀵 설계 및 진단 결과
+                                                </h2>
+                                                <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 shadow-sm">
+                                                    <div className="grid grid-cols-2 gap-4 mb-4">
+                                                        <div className="bg-white p-4 border border-slate-200 rounded-lg text-center">
+                                                            <div className="text-xs font-bold text-slate-500 mb-1">필요(설계) 송풍량</div>
+                                                            <div className="text-2xl font-black text-[#3b82f6]">{quickResult.reqQ} <span className="text-sm text-slate-400">CMM</span></div>
+                                                        </div>
+                                                        <div className="bg-white p-4 border border-slate-200 rounded-lg text-center">
+                                                            <div className="text-xs font-bold text-slate-500 mb-1">소요 정압 (10% 여유)</div>
+                                                            <div className="text-2xl font-black text-[#3b82f6]">{quickResult.totalSP} <span className="text-sm text-slate-400">mmAq</span></div>
+                                                        </div>
+                                                    </div>
+                                                    <table className="w-full border-collapse border border-slate-200 text-xs text-center bg-white">
+                                                        <tbody>
+                                                            <tr className="bg-slate-100">
+                                                                <th className="border border-slate-200 p-2 font-bold text-slate-600">추천 덕트 직경</th>
+                                                                <th className="border border-slate-200 p-2 font-bold text-slate-600">반송 속도</th>
+                                                                <th className="border border-slate-200 p-2 font-bold text-slate-600">후드 손실</th>
+                                                                <th className="border border-slate-200 p-2 font-bold text-slate-600">배관 손실</th>
+                                                            </tr>
+                                                            <tr>
+                                                                <td className="border border-slate-200 p-2 font-bold text-slate-800">Ø {quickResult.standardD} mm</td>
+                                                                <td className="border border-slate-200 p-2 font-bold text-slate-800">{quickResult.actualVd} m/s</td>
+                                                                <td className="border border-slate-200 p-2 font-bold text-slate-800">{quickResult.hoodSP} mmAq</td>
+                                                                <td className="border border-slate-200 p-2 font-bold text-slate-800">{quickResult.ductSP} mmAq</td>
+                                                            </tr>
+                                                        </tbody>
+                                                    </table>
+                                                    {(quickData.currentFanQ || quickData.currentFanSP) && (
+                                                        <div className={`mt-4 p-4 rounded-lg border-2 ${quickResult.isQGood && quickResult.isSPGood ? 'bg-emerald-50 border-emerald-400 text-emerald-800' : 'bg-red-50 border-red-400 text-red-800'}`}>
+                                                            <span className="font-bold">기존 송풍기 적합성: </span>
+                                                            {quickResult.isQGood && quickResult.isSPGood ? '풍량 및 정압 모두 적합하여 사용 가능합니다.' : '법적 기준 풍량을 달성하기에 용량이 부족하여 교체가 필요합니다.'}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* 1. 공정 Lay-out */}
+                                        {useLayout && (
+                                            <div className="mb-10 print:mb-8 print:pt-4 page-break-inside-avoid">
+                                                <h2 className="text-base font-black border-l-[3px] border-[#3b82f6] pl-2.5 mb-3 text-slate-800">
+                                                    {sIdx.layout}. 공정 Lay-out (다중설비 맵핑)
+                                                </h2>
+                                                <div className={`w-full h-[350px] sm:h-[400px] print:h-[400px] bg-slate-50 border border-slate-200 rounded-xl relative overflow-hidden pdf-layout-container`}>
+                                                    {/* FIX: svg에 ref와 각종 포인터 이벤트 핸들러 추가 완료 */}
+                                                    <svg ref={editorSvgRef} viewBox="0 0 1000 1000" className={`w-full h-full cursor-default`} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerLeave={handlePointerUp}>
+                                                        <defs>
+                                                            <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                                                                <circle cx="10" cy="10" r="1.5" fill="#e2e8f0" className="print:hidden"/>
+                                                            </pattern>
+                                                        </defs>
+                                                        <rect width="100%" height="100%" fill="url(#grid)" className="print:hidden" data-html2canvas-ignore="true" />
+                                                        
+                                                        {edges.map(e => {
+                                                            const fromNode = nodes.find(n => n.id === e.from), toNode = nodes.find(n => n.id === e.to);
+                                                            if(!fromNode || !toNode) return null;
+                                                            return (
+                                                                // FIX: 배관 선택을 위해 g 태그에 이벤트 핸들러 및 선택 효과 추가
+                                                                <g key={e.id} onPointerDown={(event) => handleEdgePointerDown(event, e.id)} className="cursor-pointer">
+                                                                    <line x1={fromNode.x} y1={fromNode.y} x2={toNode.x} y2={toNode.y} stroke={selectedEdgeId === e.id ? "#3b82f6" : "#64748b"} strokeWidth={selectedEdgeId === e.id ? "6" : "4"} strokeLinecap="round" className={selectedEdgeId === e.id ? "" : "pointer-events-none"} />
+                                                                </g>
+                                                            );
+                                                        })}
+                                                        {nodes.map(n => {
+                                                            if (n.type === 'joint') return null;
+                                                            
+                                                            let rectFill = n.type === 'fan' ? '#e0e7ff' : '#ffffff';
+                                                            let rectStroke = n.type === 'fan' ? '#4f46e5' : '#94a3b8';
+                                                            let iconClass = n.type === 'fan' ? "text-indigo-600" : "text-[#3b82f6]";
+                                                            let textFill = n.type === 'fan' ? "fill-indigo-900" : "fill-slate-800";
+
+                                                            // 선택된 노드 강조
+                                                            if (selectedNodeId === n.id) {
+                                                                rectStroke = "#3b82f6";
+                                                                rectFill = "#eff6ff";
+                                                            } else if (n.type === 'hood') {
+                                                                const hData = hoodsData.find(h => h.id === n.id);
+                                                                if (hData && hData.calc) {
+                                                                    if (hData.calc.isGood) { rectFill = '#ecfdf5'; rectStroke = '#34d399'; iconClass = "text-emerald-600"; textFill = "fill-emerald-900"; } 
+                                                                    else { rectFill = '#fef2f2'; rectStroke = '#f87171'; iconClass = "text-red-500"; textFill = "fill-red-900"; }
+                                                                }
+                                                            } else if (n.type === 'hazard') {
+                                                                rectFill = '#fff7ed'; rectStroke = '#f97316'; iconClass = "text-orange-500"; textFill = "fill-orange-900";
+                                                            }
+
+                                                            return (
+                                                                // FIX: 설비(노드) 선택을 위해 g 태그에 이벤트 핸들러 추가
+                                                                <g key={n.id} transform={`translate(${n.x - 12}, ${n.y - 12})`} onPointerDown={(event) => handleNodePointerDown(event, n.id)} className="cursor-pointer">
+                                                                    <rect width="24" height="24" rx="6" fill={rectFill} stroke={rectStroke} strokeWidth={selectedNodeId === n.id ? "2.5" : "1.5"} className="shadow-sm" />
+                                                                    {n.type === 'fan' ? (
+                                                                        <>
+                                                                            <Fan x="4" y="4" width="16" height="16" className={iconClass} />
+                                                                            <text x="12" y="-6" textAnchor="middle" className={`text-[10px] font-bold print:block drop-shadow-sm ${textFill}`}>{n.data.fanName}</text>
+                                                                        </>
+                                                                    ) : n.type === 'hazard' ? (
+                                                                        <>
+                                                                            <AlertTriangle x="4" y="4" width="16" height="16" className={iconClass} />
+                                                                            <text x="12" y="-6" textAnchor="middle" className={`text-[10px] font-bold print:block drop-shadow-sm ${textFill}`}>{n.data.hazardName || '유해인자'}</text>
+                                                                            <text x="12" y="36" textAnchor="middle" className={`text-[9px] font-bold print:block ${textFill}`}>{n.data.processName || '공정명'}</text>
+                                                                        </>
+                                                                    ) : (
+                                                                        <>
+                                                                            <Square x="4" y="4" width="16" height="16" className={iconClass} />
+                                                                            <text x="12" y="36" textAnchor="middle" className={`text-[9px] font-bold print:block ${textFill}`}>{n.data.processName}</text>
+                                                                        </>
+                                                                    )}
+                                                                </g>
+                                                            );
+                                                        })}
+                                                        
+                                                        {/* FIX: 배관(선)을 그리는 도중 화면에 미리보기 실선을 렌더링하는 코드 추가 */}
+                                                        {drawingEdge && (() => {
+                                                            const startNode = nodes.find(n => n.id === drawingEdge.startNodeId);
+                                                            if (!startNode) return null;
+                                                            return (
+                                                                <g className="pointer-events-none">
+                                                                    {drawingEdge.cornerX !== null ? (
+                                                                        <>
+                                                                            <line x1={startNode.x} y1={startNode.y} x2={drawingEdge.cornerX} y2={drawingEdge.cornerY} stroke="#3b82f6" strokeWidth="4" strokeDasharray="4 4" />
+                                                                            <line x1={drawingEdge.cornerX} y1={drawingEdge.cornerY} x2={drawingEdge.x} y2={drawingEdge.y} stroke="#3b82f6" strokeWidth="4" strokeDasharray="4 4" />
+                                                                        </>
+                                                                    ) : (
+                                                                        <line x1={startNode.x} y1={startNode.y} x2={drawingEdge.x} y2={drawingEdge.y} stroke="#3b82f6" strokeWidth="4" strokeDasharray="4 4" />
+                                                                    )}
+                                                                </g>
+                                                            );
+                                                        })()}
+                                                    </svg>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* 2. 후드 배기 결과 */}
+                                        {hoodsData.length > 0 && (
+                                            <div className="mb-10">
+                                                <div className="flex justify-between items-end border-l-[3px] border-[#3b82f6] pl-2.5 mb-3 page-break-inside-avoid">
+                                                    <h2 className="text-base font-black text-slate-800">{sIdx.hood}. 다중설비 후드 배기 및 제어풍속 결과</h2>
+                                                </div>
+                                                <div className="overflow-x-auto print:overflow-visible rounded-xl border border-slate-200">
+                                                    <table className="w-full border-collapse text-[10px] lg:text-xs">
+                                                        <thead>
+                                                            <tr className="bg-slate-50 text-slate-600 border-b border-slate-200">
+                                                                <th className="p-2.5 text-center w-8">No</th>
+                                                                <th className="p-2.5 text-center w-20 sm:w-24 border-l border-slate-200">연결 송풍기</th>
+                                                                <th className="p-2.5 text-center w-14 sm:w-16 border-l border-slate-200">사진</th>
+                                                                <th className="p-2.5 text-left border-l border-slate-200">공정명 / 형식</th>
+                                                                <th className="p-2.5 text-center w-20 sm:w-24 border-l border-slate-200">제어풍속 <span className="font-normal">(m/s)</span><br/><span className="text-[9px] text-slate-400 font-medium">측정 / 법정</span></th>
+                                                                <th className="p-2.5 text-center w-20 sm:w-24 border-l border-slate-200">배기량 <span className="font-normal">(CMM)</span><br/><span className="text-[9px] text-slate-400 font-medium">현재 / 필요</span></th>
+                                                                <th className="p-2.5 text-center w-12 sm:w-14 border-l border-slate-200">판정</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {(() => {
+                                                                let globalIdx = 1;
+                                                                const rows = [];
+                                                                const groupedHoods = {};
+                                                                const unassignedHoods = [];
+
+                                                                hoodsData.forEach(hood => {
+                                                                    const fName = hood.data.manualFanName && hood.data.manualFanName.trim() !== "" ? hood.data.manualFanName.trim() : null;
+                                                                    if (fName) {
+                                                                        if (!groupedHoods[fName]) groupedHoods[fName] = [];
+                                                                        groupedHoods[fName].push(hood);
+                                                                    } else unassignedHoods.push(hood);
+                                                                });
+
+                                                                Object.keys(groupedHoods).forEach(fanName => {
+                                                                    const hoodsInGroup = groupedHoods[fanName];
+                                                                    hoodsInGroup.forEach((hood, hIdx) => {
+                                                                        const { data, calc } = hood;
+                                                                        const typeLabel = data.hoodType === 'enclosure' ? '포위식' : data.hoodType === 'ext_up' ? '외부 상방' : data.hoodType === 'ext_side' ? '외부 측방' : '외부 하방';
+                                                                        const permitLabel = (data.hoodType === 'enclosure' && data.isPermitted) ? '(허가)' : '';
+                                                                        rows.push(
+                                                                            <tr key={hood.id} className={`${calc.isGood ? 'bg-white' : 'bg-red-50/30'} border-b border-slate-100 last:border-b-0 page-break-inside-avoid`}>
+                                                                                <td className="p-2 text-center font-bold text-slate-500">{globalIdx++}</td>
+                                                                                {hIdx === 0 && (
+                                                                                    <td rowSpan={hoodsInGroup.length} className="border-l border-slate-100 p-2 text-center align-middle font-black text-indigo-700 bg-indigo-50/40">
+                                                                                        {fanName}
+                                                                                    </td>
+                                                                                )}
+                                                                                <td className="border-l border-slate-100 p-2 text-center align-middle">
+                                                                                    {data.photo ? <img src={data.photo} alt="현장" className="w-12 h-8 object-cover mx-auto rounded shadow-sm print:w-16 print:h-10 border border-slate-200" /> : <span className="text-[9px] font-medium text-slate-400">없음</span>}
+                                                                                </td>
+                                                                                <td className="border-l border-slate-100 p-2.5">
+                                                                                    <div className="font-bold text-slate-800">{data.processName}</div>
+                                                                                    <div className="text-[10px] text-slate-500 mt-1 font-medium">
+                                                                                        {typeLabel} <span className="text-red-500 font-bold">{permitLabel}</span>
+                                                                                        <div className="mt-0.5 text-slate-400">{data.hoodType === 'enclosure' ? `개구 A=${calc.openingArea}㎡ | 측정 A=${calc.area}㎡` : `측정 A=${calc.area}㎡`}</div>
+                                                                                    </div>
+                                                                                </td>
+                                                                                <td className="border-l border-slate-100 p-2 text-center">
+                                                                                    <div className="flex flex-col items-center justify-center h-full">
+                                                                                        <span className={`font-black ${calc.isVelocityGood ? 'text-[#3b82f6]' : 'text-red-500'}`}>{data.measuredControlVelocity || '0'}</span>
+                                                                                        <div className="w-8 h-[1px] bg-slate-200 my-1"></div>
+                                                                                        <span className="text-slate-500 font-bold">{data.controlVelocity || '0'}</span>
+                                                                                    </div>
+                                                                                </td>
+                                                                                <td className="border-l border-slate-100 p-2 text-center">
+                                                                                    <div className="flex flex-col items-center justify-center h-full">
+                                                                                        <span className={`font-black ${calc.isVolumeGood ? 'text-[#3b82f6]' : 'text-red-500'}`}>{calc.currentQ}</span>
+                                                                                        <div className="w-10 h-[1px] bg-slate-200 my-1"></div>
+                                                                                        <span className="text-slate-500 font-bold">{calc.requiredQ}</span>
+                                                                                    </div>
+                                                                                </td>
+                                                                                <td className="border-l border-slate-100 p-2 text-center align-middle">
+                                                                                    <span className={`inline-block px-2 py-1 rounded-md text-[10px] font-black ${calc.isGood ? 'bg-blue-50 text-[#3b82f6]' : 'bg-red-50 text-red-500'}`}>
+                                                                                        {calc.isGood ? '양호' : '불량'}
+                                                                                    </span>
+                                                                                </td>
+                                                                            </tr>
+                                                                        );
+                                                                    });
+                                                                });
+
+                                                                unassignedHoods.forEach(hood => {
+                                                                    const { data, calc } = hood;
+                                                                    const typeLabel = data.hoodType === 'enclosure' ? '포위식' : data.hoodType === 'ext_up' ? '외부 상방' : data.hoodType === 'ext_side' ? '외부 측방' : '외부 하방';
+                                                                    const permitLabel = (data.hoodType === 'enclosure' && data.isPermitted) ? '(허가)' : '';
+                                                                    rows.push(
+                                                                        <tr key={hood.id} className={`${calc.isGood ? 'bg-white' : 'bg-red-50/30'} border-b border-slate-100 last:border-b-0 page-break-inside-avoid`}>
+                                                                            <td className="p-2 text-center font-bold text-slate-500">{globalIdx++}</td>
+                                                                            <td className="border-l border-slate-100 p-2 text-center align-middle font-bold text-slate-400 bg-slate-50/50">미연결</td>
+                                                                            <td className="border-l border-slate-100 p-2 text-center align-middle">
+                                                                                {data.photo ? <img src={data.photo} alt="현장" className="w-12 h-8 object-cover mx-auto rounded shadow-sm print:w-16 print:h-10 border border-slate-200" /> : <span className="text-[9px] font-medium text-slate-400">없음</span>}
+                                                                            </td>
+                                                                            <td className="border-l border-slate-100 p-2.5">
+                                                                                <div className="font-bold text-slate-800">{data.processName}</div>
+                                                                                <div className="text-[10px] text-slate-500 mt-1 font-medium">
+                                                                                    {typeLabel} <span className="text-red-500 font-bold">{permitLabel}</span>
+                                                                                    <div className="mt-0.5 text-slate-400">{data.hoodType === 'enclosure' ? `개구 A=${calc.openingArea}㎡ | 측정 A=${calc.area}㎡` : `측정 A=${calc.area}㎡`}</div>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td className="border-l border-slate-100 p-2 text-center">
+                                                                                <div className="flex flex-col items-center justify-center h-full">
+                                                                                    <span className={`font-black ${calc.isVelocityGood ? 'text-[#3b82f6]' : 'text-red-500'}`}>{data.measuredControlVelocity || '0'}</span>
+                                                                                    <div className="w-8 h-[1px] bg-slate-200 my-1"></div>
+                                                                                    <span className="text-slate-500 font-bold">{data.controlVelocity || '0'}</span>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td className="border-l border-slate-100 p-2 text-center">
+                                                                                <div className="flex flex-col items-center justify-center h-full">
+                                                                                    <span className={`font-black ${calc.isVolumeGood ? 'text-[#3b82f6]' : 'text-red-500'}`}>{calc.currentQ}</span>
+                                                                                    <div className="w-10 h-[1px] bg-slate-200 my-1"></div>
+                                                                                    <span className="text-slate-500 font-bold">{calc.requiredQ}</span>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td className="border-l border-slate-100 p-2 text-center align-middle">
+                                                                                <span className={`inline-block px-2 py-1 rounded-md text-[10px] font-black ${calc.isGood ? 'bg-blue-50 text-[#3b82f6]' : 'bg-red-50 text-red-500'}`}>
+                                                                                    {calc.isGood ? '양호' : '불량'}
+                                                                                </span>
+                                                                            </td>
+                                                                        </tr>
+                                                                    );
+                                                                });
+                                                                return rows;
+                                                            })()}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* 3. 송풍기 결과 */}
+                                        {fansData.length > 0 && (
+                                            <div className="mb-10 page-break-inside-avoid">
+                                                <div className="flex justify-between items-end border-l-[3px] border-indigo-500 pl-2.5 mb-3">
+                                                    <h2 className="text-base font-black text-slate-800">{sIdx.fan}. 다중설비 송풍기 성능 및 밸런스</h2>
+                                                </div>
+                                                <div className="overflow-x-auto print:overflow-visible rounded-xl border border-slate-200">
+                                                    <table className="w-full border-collapse text-[10px] lg:text-xs">
+                                                        <thead>
+                                                            <tr className="bg-indigo-50 text-indigo-800 border-b border-indigo-100">
+                                                                <th className="p-2.5 text-center w-8">No</th>
+                                                                <th className="p-2.5 text-left border-l border-indigo-100/50">송풍기 명칭</th>
+                                                                <th className="p-2.5 text-center border-l border-indigo-100/50">배기량 <span className="font-normal">(CMM)</span><br/><span className="text-[9px] font-medium text-indigo-500/80">측정 / 정격</span></th>
+                                                                <th className="p-2.5 text-center border-l border-indigo-100/50">정압 <span className="font-normal">(mmAq)</span><br/><span className="text-[9px] font-medium text-indigo-500/80">측정 / 정격</span></th>
+                                                                <th className="p-2.5 text-center w-24 border-l border-indigo-100/50">후드 연결<br/><span className="text-[9px] font-medium text-indigo-500/80">배기량 합계 / 흡입비</span></th>
+                                                                <th className="p-2.5 text-center w-20 border-l border-indigo-100/50">송풍기 효율<br/><span className="text-[9px] font-medium text-indigo-500/80">종합 판정</span></th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {fansData.map((fan, idx) => {
+                                                                const { data, calc } = fan;
+                                                                return (
+                                                                    <tr key={fan.id} className={`${calc.status === '양호' ? 'bg-white' : calc.status === '미흡' ? 'bg-orange-50/20' : 'bg-red-50/20'} border-b border-slate-100 last:border-b-0 page-break-inside-avoid`}>
+                                                                        <td className="p-2.5 text-center font-bold text-slate-500">{idx + 1}</td>
+                                                                        <td className="p-2.5 border-l border-slate-100 font-black text-indigo-700">
+                                                                            {data.fanName}
+                                                                            <div className="text-[9px] font-medium text-slate-400 mt-1">연결 후드: {calc.connectedHoods.length}개소</div>
+                                                                            {data.hasPurifier && (
+                                                                                <div className="text-[9px] font-bold mt-1.5 text-emerald-600 bg-emerald-50 p-1.5 rounded-lg border border-emerald-100 leading-tight">
+                                                                                    + {PURIFIER_TYPES.find(p=>p.id===data.purifierType)?.name.split(' ')[0]}<br/>
+                                                                                    (차압: {data.purifierDiffPress || '-'} mmH2O) <span className={calc.purifierStatus.includes('미흡') ? 'text-red-500' : 'text-emerald-700'}>[{calc.purifierStatus}]</span>
+                                                                                </div>
+                                                                            )}
+                                                                        </td>
+                                                                        <td className="p-2.5 border-l border-slate-100 text-center">
+                                                                            <span className="font-black text-indigo-600">{data.measuredQ || '-'}</span> <span className="text-slate-300 font-bold mx-1">/</span> <span className="font-bold text-slate-500">{data.ratedQ || '-'}</span>
+                                                                        </td>
+                                                                        <td className="p-2.5 border-l border-slate-100 text-center">
+                                                                            <span className="font-black text-indigo-600">{data.measuredSP || '-'}</span> <span className="text-slate-300 font-bold mx-1">/</span> <span className="font-bold text-slate-500">{data.ratedSP || '-'}</span>
+                                                                        </td>
+                                                                        <td className="p-2.5 border-l border-slate-100 text-center">
+                                                                            <div className="font-black text-slate-700">{calc.sumCurrentQ.toFixed(1)} CMM</div>
+                                                                            <div className="text-[10px] text-slate-500 mt-0.5 font-medium">흡입비: {calc.suctionRatio.toFixed(1)}%</div>
+                                                                        </td>
+                                                                        <td className="p-2.5 border-l border-slate-100 text-center align-middle">
+                                                                            <div className={`font-black text-sm ${calc.status === '양호' ? 'text-emerald-500' : calc.status === '미흡' ? 'text-orange-500' : 'text-red-500'}`}>
+                                                                                {calc.eff > 0 ? `${calc.eff.toFixed(1)}%` : '-'}
+                                                                            </div>
+                                                                            <div className={`text-[10px] inline-block font-black mt-1 px-2 py-0.5 rounded-md ${calc.status === '양호' ? 'bg-emerald-50 text-emerald-600' : calc.status === '미흡' ? 'bg-orange-50 text-orange-600' : 'bg-red-50 text-red-600'}`}>
+                                                                                {calc.status}
+                                                                            </div>
+                                                                        </td>
+                                                                    </tr>
+                                                                );
+                                                            })}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* 4. 종합 평가 요약 */}
+                                        {(hoodsData.length > 0 || fansData.length > 0) && (
+                                            <div className="mb-10 page-break-inside-avoid">
+                                                <h2 className="text-base font-black border-l-[3px] border-[#3b82f6] pl-2.5 mb-4 text-slate-800">
+                                                    {sIdx.overall}. 종합 평가 요약
+                                                </h2>
+                                                <div className="flex flex-col md:flex-row print:flex-row gap-4">
+                                                    {hoodsData.length > 0 && (
+                                                        <div className="flex-1 bg-slate-50 border border-slate-200 rounded-xl p-5 flex items-center justify-center gap-6 page-break-inside-avoid shadow-sm">
+                                                            <div className="relative w-24 h-24 sm:w-28 sm:h-28 transform -rotate-90">
+                                                                <svg width="100%" height="100%" viewBox="0 0 36 36" className="drop-shadow-sm">
+                                                                    <circle cx="18" cy="18" r="15.91549430918954" fill="transparent" stroke="#e2e8f0" strokeWidth="4" />
+                                                                    <circle cx="18" cy="18" r="15.91549430918954" fill="transparent" stroke="#3b82f6" strokeWidth="4.5" strokeDasharray={`${pieDashArray} ${100 - pieDashArray}`} strokeDashoffset="0" className="transition-all duration-1000 ease-out" strokeLinecap="round" />
+                                                                </svg>
+                                                                <div className="absolute inset-0 flex flex-col items-center justify-center transform rotate-90">
+                                                                    <span className="text-xl sm:text-2xl font-black text-slate-800">{Math.round(pieDashArray)}%</span>
+                                                                    <span className="text-[9px] sm:text-[10px] font-bold text-slate-500">후드 적합률</span>
+                                                                </div>
+                                                            </div>
+                                                            <div className="space-y-3">
+                                                                <div className="flex items-center gap-2.5">
+                                                                    <div className="w-2 h-8 bg-[#3b82f6] rounded-full"></div>
+                                                                    <div>
+                                                                        <div className="text-[11px] font-bold text-slate-500">양호 후드</div>
+                                                                        <div className="text-lg font-black text-slate-800">{goodHoods} <span className="text-[10px] font-bold text-slate-400">개소</span></div>
+                                                                    </div>
+                                                                </div>
+                                                                <div className="flex items-center gap-2.5">
+                                                                    <div className="w-2 h-8 bg-slate-300 rounded-full"></div>
+                                                                    <div>
+                                                                        <div className="text-[11px] font-bold text-slate-500">불량 후드</div>
+                                                                        <div className="text-lg font-black text-slate-800">{badHoods} <span className="text-[10px] font-bold text-slate-400">개소</span></div>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {fansData.length > 0 && (
+                                                        <div className="flex-1 bg-slate-50 border border-slate-200 rounded-xl p-5 flex items-center justify-center gap-4 page-break-inside-avoid shadow-sm">
+                                                            <div className="relative w-24 h-24 sm:w-28 sm:h-28 transform -rotate-90">
+                                                                <svg width="100%" height="100%" viewBox="0 0 36 36" className="drop-shadow-sm">
+                                                                    <circle cx="18" cy="18" r="15.91549430918954" fill="transparent" stroke="#e2e8f0" strokeWidth="4" />
+                                                                    <circle cx="18" cy="18" r="15.91549430918954" fill="transparent" stroke="#fb923c" strokeWidth="4.5" strokeDasharray={`${fanFairPct} ${100 - fanFairPct}`} strokeDashoffset={-fanGoodPct} className="transition-all duration-1000 ease-out" />
+                                                                    <circle cx="18" cy="18" r="15.91549430918954" fill="transparent" stroke="#10b981" strokeWidth="4.5" strokeDasharray={`${fanGoodPct} ${100 - fanGoodPct}`} strokeDashoffset="0" className="transition-all duration-1000 ease-out" strokeLinecap="round" />
+                                                                </svg>
+                                                                <div className="absolute inset-0 flex flex-col items-center justify-center transform rotate-90">
+                                                                    <span className="text-xl sm:text-2xl font-black text-slate-800">{totalEvalFans > 0 ? Math.round(fanGoodPct) : 0}%</span>
+                                                                    <span className="text-[9px] sm:text-[10px] font-bold text-slate-500">송풍기 양호율</span>
+                                                                </div>
+                                                            </div>
+                                                            <div className="space-y-2">
+                                                                <div className="flex items-center gap-2">
+                                                                    <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div>
+                                                                    <div className="w-full flex justify-between gap-4">
+                                                                        <div className="text-[10px] font-bold text-slate-500">양호 (80%↑)</div>
+                                                                        <div className="text-xs font-black text-slate-800">{goodFans}대</div>
+                                                                    </div>
+                                                                </div>
+                                                                <div className="flex items-center gap-2">
+                                                                    <div className="w-1.5 h-1.5 bg-orange-400 rounded-full"></div>
+                                                                    <div className="w-full flex justify-between gap-4">
+                                                                        <div className="text-[10px] font-bold text-slate-500">미흡 (60~80%)</div>
+                                                                        <div className="text-xs font-black text-slate-800">{fairFans}대</div>
+                                                                    </div>
+                                                                </div>
+                                                                <div className="flex items-center gap-2">
+                                                                    <div className="w-1.5 h-1.5 bg-slate-300 rounded-full"></div>
+                                                                    <div className="w-full flex justify-between gap-4">
+                                                                        <div className="text-[10px] font-bold text-slate-500">불량 (60%↓)</div>
+                                                                        <div className="text-xs font-black text-slate-800">{badFans}대</div>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* 5. 육안평가 및 기류평가 */}
+                                        <div className="mb-10 page-break-inside-avoid">
+                                            <h2 className="text-base font-black border-l-[3px] border-[#3b82f6] pl-2.5 mb-3 text-slate-800">
+                                                {sIdx.visual}. 육안평가 및 기류평가
+                                            </h2>
+                                            <div className="mb-8 page-break-inside-avoid">
+                                                <div className="bg-slate-800 text-white font-bold p-2 px-4 text-xs rounded-t-lg inline-block">Step 1 육안평가</div>
+                                                <div className="border border-slate-200 rounded-b-xl rounded-tr-xl overflow-hidden shadow-sm">
+                                                    <table className="w-full border-collapse text-[10px] sm:text-xs bg-white text-center">
+                                                        <tbody>
+                                                            {visualGroups.map((group, gIdx) => (
+                                                                <React.Fragment key={`rep-g-${gIdx}`}>
+                                                                    {group.items.map((item, iIdx) => (
+                                                                        <tr key={`rep-${item.id}`} className="border-b border-slate-100 last:border-b-0 hover:bg-slate-50/50">
+                                                                            {iIdx === 0 && (
+                                                                                <th rowSpan={group.items.length} className="border-r border-slate-100 bg-slate-50 p-2.5 w-[15%] text-slate-700 font-black whitespace-pre-line">
+                                                                                    {group.name}
+                                                                                </th>
+                                                                            )}
+                                                                            <th className="border-r border-slate-100 bg-slate-50 p-2.5 w-[15%] text-slate-600 font-bold whitespace-pre-line">
+                                                                                {item.name}
+                                                                            </th>
+                                                                            <td className="border-r border-slate-100 p-2.5 w-[20%] font-black align-middle">
+                                                                                <div className="flex gap-4 justify-center">
+                                                                                    <span className={evaluationData.visual[item.id] === '양호' ? 'text-[#3b82f6]' : 'text-slate-300'}>
+                                                                                        {evaluationData.visual[item.id] === '양호' ? '☑ 양호' : '☐ 양호'}
+                                                                                    </span>
+                                                                                    <span className={evaluationData.visual[item.id] === '미흡' ? 'text-red-500' : 'text-slate-300'}>
+                                                                                        {evaluationData.visual[item.id] === '미흡' ? '☑ 미흡' : '☐ 미흡'}
+                                                                                    </span>
+                                                                                </div>
+                                                                            </td>
+                                                                            <td className="p-2.5 text-left text-slate-600 w-[50%] break-keep font-medium">
+                                                                                {item.desc}
+                                                                                {evaluationData.visual[item.id] === '미흡' && evaluationData.visualTargets?.[item.id]?.length > 0 && (
+                                                                                    <div className="mt-1.5 text-[10px] text-red-500 font-bold">
+                                                                                        * 해당 설비: {evaluationData.visualTargets[item.id].map(id => nodes.find(n => n.id === id)?.data.processName).filter(Boolean).join(', ')}
+                                                                                    </div>
+                                                                                )}
+                                                                            </td>
+                                                                        </tr>
+                                                                    ))}
+                                                                </React.Fragment>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+
+                                            <div className="page-break-inside-avoid">
+                                                <div className="bg-slate-800 text-white font-bold p-2 px-4 text-xs rounded-t-lg inline-block">Step 2 기류평가</div>
+                                                <div className="border border-slate-200 rounded-b-xl rounded-tr-xl overflow-hidden shadow-sm">
+                                                    <table className="w-full border-collapse text-[10px] sm:text-xs bg-white">
+                                                        <tbody>
+                                                            <tr className="border-b border-slate-100 bg-white">
+                                                                <td className="p-3 border-r border-slate-100 bg-slate-50 font-black text-center w-[25%] whitespace-pre-line text-slate-700">
+                                                                    기류평가<br/><span className="text-[10px] font-medium text-slate-500">(연기발생기)</span>
+                                                                </td>
+                                                                <td className="p-3 border-r border-slate-100 whitespace-nowrap w-[30%] text-center align-middle">
+                                                                    <div className="flex flex-col gap-2 items-center">
+                                                                        <label className={`cursor-pointer inline-flex items-center gap-1.5 font-bold transition-colors px-3 py-1.5 rounded-md w-full justify-center ${evaluationData.airflow.status === '양호' ? 'bg-[#3b82f6]/10 text-[#3b82f6]' : 'text-slate-400 hover:bg-slate-50'}`}>
+                                                                            <input type="radio" name="airflow_status" className="hidden" checked={evaluationData.airflow.status === '양호'} onChange={() => updateEval('airflow', 'status', '양호')} />
+                                                                            <div className={`w-3 h-3 rounded-full border-2 flex items-center justify-center ${evaluationData.airflow.status === '양호' ? 'border-[#3b82f6]' : 'border-slate-300'}`}>
+                                                                                {evaluationData.airflow.status === '양호' && <div className="w-1.5 h-1.5 bg-[#3b82f6] rounded-full"></div>}
+                                                                            </div> 양호
+                                                                        </label>
+                                                                        <label className={`cursor-pointer inline-flex items-center gap-1.5 font-bold transition-colors px-3 py-1.5 rounded-md w-full justify-center ${evaluationData.airflow.status === '미흡' ? 'bg-red-50 text-red-500' : 'text-slate-400 hover:bg-slate-50'}`}>
+                                                                            <input type="radio" name="airflow_status" className="hidden" checked={evaluationData.airflow.status === '미흡'} onChange={() => updateEval('airflow', 'status', '미흡')} />
+                                                                            <div className={`w-3 h-3 rounded-full border-2 flex items-center justify-center ${evaluationData.airflow.status === '미흡' ? 'border-red-500' : 'border-slate-300'}`}>
+                                                                                {evaluationData.airflow.status === '미흡' && <div className="w-1.5 h-1.5 bg-red-500 rounded-full"></div>}
+                                                                            </div> 미흡
+                                                                        </label>
+                                                                    </div>
+                                                                    {evaluationData.airflow.status === '미흡' && (
+                                                                        <div className="mt-2.5 p-2.5 bg-red-50/50 border border-red-100 rounded-lg flex flex-col gap-1.5 animate-in fade-in w-full text-left">
+                                                                            <span className="text-[10px] font-black text-red-600 mb-0.5">▶ 결함이 발견된 설비 선택 (다중가능)</span>
+                                                                            <div className="flex flex-wrap gap-1.5">
+                                                                                {nodes.filter(n => n.type === 'hood').map(n => {
+                                                                                    const isChecked = evaluationData.airflowTargets?.includes(n.id);
+                                                                                    return (
+                                                                                        <label key={`air-${n.id}`} className={`text-[10px] px-2 py-1.5 rounded-md cursor-pointer border shadow-sm transition-colors ${isChecked ? 'bg-red-500 text-white border-red-500 font-bold' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
+                                                                                            <input type="checkbox" className="hidden" checked={isChecked || false} onChange={(e) => {
+                                                                                                const curr = evaluationData.airflowTargets || [];
+                                                                                                const next = e.target.checked ? [...curr, n.id] : curr.filter(id => id !== n.id);
+                                                                                                setEvaluationData(prev => ({ ...prev, airflowTargets: next }));
+                                                                                            }} />
+                                                                                            {n.data.processName}
+                                                                                        </label>
+                                                                                    )
+                                                                                })}
+                                                                            </div>
+                                                                        </div>
+                                                                    )}
+                                                                </td>
+                                                                <td className="p-0 w-[45%]">
+                                                                    <table className="w-full border-collapse h-full">
+                                                                        <tbody>
+                                                                            <tr><th className="bg-slate-50 border-b border-slate-100 p-2 text-center font-bold text-slate-700">부적정 위치</th></tr>
+                                                                            <tr>
+                                                                                <td className="p-2 h-10 font-black text-red-500 text-center flex flex-col justify-center items-center">
+                                                                                    {evaluationData.airflow.badLocation || '\u00A0'}
+                                                                                    {evaluationData.airflow.status === '미흡' && evaluationData.airflowTargets?.length > 0 && (
+                                                                                        <div className="mt-1 text-[10px] text-red-500 font-bold leading-tight px-2">
+                                                                                            * 불량 대상: {evaluationData.airflowTargets.map(id => nodes.find(n => n.id === id)?.data.processName).filter(Boolean).join(', ')}
+                                                                                        </div>
+                                                                                    )}
+                                                                                </td>
+                                                                            </tr>
+                                                                        </tbody>
+                                                                    </table>
+                                                                </td>
+                                                            </tr>
+                                                            <tr className="border-b border-slate-100 bg-white">
+                                                                <td colSpan="3" className="p-2.5 px-4">
+                                                                    <div className="flex justify-between items-center w-full">
+                                                                        <span className="text-slate-600 font-medium break-keep"><b className="font-bold text-slate-800 mr-1">• 흡인 속도:</b> 연기가 흡인되는 속도가 매우 빠름</span>
+                                                                        <span className={`font-bold text-sm ml-2 cursor-pointer ${evaluationData.airflow.speedChecked ? 'text-[#3b82f6]' : 'text-slate-300'}`} onClick={() => updateEval('airflow', 'speedChecked', !evaluationData.airflow.speedChecked)}>
+                                                                            {evaluationData.airflow.speedChecked ? '☑' : '☐'}
+                                                                        </span>
+                                                                    </div>
+                                                                </td>
+                                                            </tr>
+                                                            <tr className="bg-white">
+                                                                <td colSpan="3" className="p-2.5 px-4">
+                                                                    <div className="flex justify-between items-center w-full">
+                                                                        <span className="text-slate-600 font-medium break-keep"><b className="font-bold text-slate-800 mr-1">• 흡인 상태:</b> 연기가 확산되지 않고 모두 흡인</span>
+                                                                        <span className={`font-bold text-sm ml-2 cursor-pointer ${evaluationData.airflow.statusChecked ? 'text-[#3b82f6]' : 'text-slate-300'}`} onClick={() => updateEval('airflow', 'statusChecked', !evaluationData.airflow.statusChecked)}>
                                                                             {evaluationData.airflow.statusChecked ? '☑' : '☐'}
                                                                         </span>
                                                                     </div>
